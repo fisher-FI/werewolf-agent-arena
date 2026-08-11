@@ -223,3 +223,84 @@ def test_gameover_frozen():
     # 转移应拒绝
     with pytest.raises(IllegalTransitionError):
         eng._transition(GamePhase.NIGHT)
+
+
+# ─── 第二批修复的回归测试 ───
+
+def test_witch_cannot_self_save_after_night1():
+    """非首夜女巫不能自救（药水不消耗）"""
+    eng = make_engine()
+    eng.assign_roles()
+    eng.start_game()
+    witch = find_role(eng, Role.WITCH)
+    eng.state.day_count = 3  # 第3夜
+    eng.process_werewolf_kill(witch)
+    eng.process_witch_action(witch, save=True)
+    assert eng.state.witch_antidote is True, "非首夜自救应保留药水"
+    eng.resolve_night()
+    assert witch not in eng.state.alive_players, "非首夜自救无效，女巫应死"
+
+
+def test_witch_can_self_save_night1():
+    """首夜女巫可自救"""
+    eng = make_engine()
+    eng.assign_roles()
+    eng.start_game()
+    witch = find_role(eng, Role.WITCH)
+    eng.process_werewolf_kill(witch)
+    eng.process_witch_action(witch, save=True)
+    assert eng.state.witch_antidote is False, "首夜自救应消耗药水"
+    eng.resolve_night()
+    assert witch in eng.state.alive_players, "首夜自救成功，女巫应存活"
+
+
+def test_alpha_last_wolf_still_carries():
+    """狼王是最后一只狼被票出：应先带人再判胜（技能不被吞）"""
+    eng = make_engine("lwsh")
+    eng.assign_roles()
+    eng.start_game()
+    alpha = find_role(eng, Role.ALPHA_WOLF)
+    # 杀掉其他狼
+    for w in eng.get_alive_werewolves():
+        if w != alpha:
+            eng.state.alive_players.remove(w)
+    # 投票出狼王
+    eng.state.phase = GamePhase.DAY_VOTE
+    voter = [p for p in eng.state.alive_players if p != alpha][0]
+    eng.process_vote(voter, alpha)
+    events = eng.resolve_votes()
+    # 应进入 SHOOT 而非直接 GAMEOVER
+    assert eng.state.phase == GamePhase.SHOOT, f"应先开枪，实际 {eng.state.phase}"
+    # 带人后判胜
+    target = [p for p in eng.state.alive_players if p != alpha][0]
+    events = eng.process_shoot(alpha, target)
+    assert eng.state.phase == GamePhase.GAMEOVER
+
+
+def test_vote_dead_player_is_abstain():
+    """投已死玩家视为弃票"""
+    eng = make_engine()
+    eng.assign_roles()
+    eng.start_game()
+    # 杀掉 p5
+    eng.state.alive_players.remove("p5")
+    eng.state.phase = GamePhase.DAY_VOTE
+    event = eng.process_vote("p1", "p5")
+    assert "p5" not in eng.state.vote_results, "投死者不应计入"
+    assert event.metadata.get("abstain"), "应标记为弃票"
+
+
+def test_human_shoot_resolution():
+    """人类开枪输入解析：座位号/名字/空"""
+    from ai.orchestrator import Room
+    room = Room(board_id="ywls")
+    for i in range(1, 13):
+        room.add_player(Player(id=f"p{i}", name=f"玩家{i}", seat=i, player_type="ai"))
+    eng = GameEngine(room.players, get_board("ywls"))
+    eng.assign_roles()
+    eng.start_game()
+    room.engine = eng
+    assert room._resolve_human_target("5") == "p5", "座位号解析"
+    assert room._resolve_human_target("玩家7") == "p7", "名字解析"
+    assert room._resolve_human_target("") == "", "空=放弃"
+    assert room._resolve_human_target("99") == "", "无效目标=放弃"

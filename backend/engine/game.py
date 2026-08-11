@@ -158,8 +158,19 @@ class GameEngine:
 
     def process_witch_action(self, witch_id: str, save: bool = False,
                              poison_target: str = None) -> list:
-        """女巫救/毒（各限一次）"""
+        """女巫救/毒（各限一次）；自救仅首夜有效"""
         events = []
+        self.state.night_actions["witch_id"] = witch_id
+        # 非首夜不能自救：被刀者是自己时，救人无效且不消耗药水
+        wolf_target = self.state.night_actions.get("wolf")
+        if save and self.state.witch_antidote:
+            if wolf_target == witch_id and self.state.day_count > 1:
+                events.append(self.emit(
+                    EventType.SYSTEM,
+                    content="女巫非首夜不能自救，解药保留",
+                    visible_to=[witch_id],
+                ))
+                save = False
         if save and self.state.witch_antidote:
             self.state.night_actions["witch_save"] = True
             self.state.witch_antidote = False
@@ -222,9 +233,14 @@ class GameEngine:
 
         deaths = []  # (pid, reason)
         # 狼刀：被守或被救不死；同守同救必死
+        # 女巫自救规则：仅首夜（day_count==1）可自救
+        witch_id = actions.get("witch_id")
+        save_effective = saved
+        if saved and wolf_target == witch_id and self.state.day_count > 1:
+            save_effective = False  # 非首夜不能自救
         if wolf_target:
-            protected = wolf_target == guarded or saved
-            same_guard_save = wolf_target == guarded and saved
+            protected = wolf_target == guarded or save_effective
+            same_guard_save = wolf_target == guarded and save_effective
             if not protected or same_guard_save:
                 deaths.append((wolf_target, "wolf_kill"))
         if poisoned:
@@ -279,20 +295,20 @@ class GameEngine:
         return events
 
     def _after_night_resolve(self) -> list:
-        """夜晚结算后：判胜 / 开枪窗口 / 进入白天"""
+        """夜晚结算后：先处理开枪窗口（技能不被吞），再判胜/进入白天"""
         events = []
-        winner = self.check_winner()
-        if winner:
-            events += self.end_game(winner)
-            return events
         if self.state.pending_shoots:
             self._transition(GamePhase.SHOOT)
             events.append(self.emit(
                 EventType.PHASE_CHANGE,
                 content="有人可以开枪/带人…",
             ))
-        else:
-            self._open_day(events)
+            return events
+        winner = self.check_winner()
+        if winner:
+            events += self.end_game(winner)
+            return events
+        self._open_day(events)
         return events
 
     def process_shoot(self, shooter_id: str, target_id: str = None) -> list:
@@ -318,20 +334,23 @@ class GameEngine:
                 content=f"{self.players[shooter].name} 放弃了技能",
             ))
 
+        # 队列未清空时继续留在 SHOOT（即使已满足胜负也等全部技能释放完）
+        if self.state.pending_shoots:
+            return events
+        # 队列清空后才判胜，避免技能被吞
         winner = self.check_winner()
         if winner:
             events += self.end_game(winner)
             return events
-        # 还有待开枪的继续留在 SHOOT，否则进入下一阶段
-        if not self.state.pending_shoots:
-            if self.state.phase == GamePhase.SHOOT:
-                if self._just_voted():
-                    # 投票后的开枪窗口 → 进入夜晚
-                    self._open_night(events)
-                    self.state._after_vote = False
-                else:
-                    # 夜晚结算后的开枪窗口 → 进入白天
-                    self._open_day(events)
+        # 进入下一阶段
+        if self.state.phase == GamePhase.SHOOT:
+            if self._just_voted():
+                # 投票后的开枪窗口 → 进入夜晚
+                self._open_night(events)
+                self.state._after_vote = False
+            else:
+                # 夜晚结算后的开枪窗口 → 进入白天
+                self._open_day(events)
         return events
 
     def _just_voted(self) -> bool:
@@ -425,6 +444,15 @@ class GameEngine:
                 content=f"{p.name if p else voter_id}（白痴翻牌）无投票权，自动弃票",
                 metadata={"abstain": True, "no_vote_right": True},
             )
+        # 投已死玩家 → 视为弃票（无效票不记录）
+        if target_id not in self.state.alive_players:
+            p = self.players.get(voter_id)
+            return self.emit(
+                EventType.VOTE_CAST,
+                player_id=voter_id, player_name=p.name if p else "",
+                content=f"{p.name if p else voter_id} 投给已出局玩家，视为弃票",
+                metadata={"abstain": True, "invalid_target": True},
+            )
         self.state.vote_results[voter_id] = target_id
         p = self.players.get(voter_id)
         t = self.players.get(target_id)
@@ -494,17 +522,18 @@ class GameEngine:
             self.state.vote_results.clear()
 
         self.state._after_vote = True
-        winner = self.check_winner()
-        if winner:
-            events += self.end_game(winner)
-            return events
+        # 先处理开枪队列（狼王被票出/猎人被票出即使狼已全灭也应先释放技能）
         if self.state.pending_shoots:
             self._transition(GamePhase.SHOOT)
             events.append(self.emit(
                 EventType.PHASE_CHANGE, content="有玩家可以开枪/带人…"))
-        else:
-            self._open_night(events)
-            self.state._after_vote = False
+            return events
+        winner = self.check_winner()
+        if winner:
+            events += self.end_game(winner)
+            return events
+        self._open_night(events)
+        self.state._after_vote = False
         return events
 
     # ─── 胜负判定（声明式，优先级：情侣 > 狼 > 好人） ───

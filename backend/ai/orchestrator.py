@@ -186,7 +186,8 @@ class Room:
 
         await self.broadcast("game_start", {
             "room_id": self.id,
-            "board": {"id": self.board.id, "name": self.board.name},
+            "board": {"id": self.board.id, "name": self.board.name,
+                       "max_players": self.max_players},
             "players": [p.to_public_dict() for p in self.players],
         })
         for p in self.players:
@@ -221,8 +222,11 @@ class Room:
                 resp = await self._act(cupids[0], "decide_night_action")
                 target = self._resolve_cupid_target(resp, cupids[0])
                 if target and len(target) == 2:
-                    self.engine.process_cupid_chain(cupids[0], target[0], target[1])
-                    await self._emit_engine_events([self.engine.state.events[-1]])
+                    try:
+                        self.engine.process_cupid_chain(cupids[0], target[0], target[1])
+                        await self._emit_engine_events([self.engine.state.events[-1]])
+                    except ValueError as e:
+                        logger.warning(f"丘比特行动非法被拒绝: {e}")
                 await self._delay(2)
 
         # 守卫守人
@@ -231,13 +235,16 @@ class Room:
             if guards:
                 resp = await self._act(guards[0], "decide_night_action")
                 if resp.action:
-                    self.engine.process_guard_protect(guards[0], resp.action)
-                    await self._emit_engine_events([self.engine.state.events[-1]])
-                    await self._broadcast_ai(guards[0], resp, "守卫守护目标")
-                    # 记忆：守卫守护记录
-                    t = self.engine.get_player(resp.action)
-                    self.memory.get(guards[0]).record_private(
-                        state.day_count, f"你守护了 {t.name if t else resp.action}")
+                    try:
+                        self.engine.process_guard_protect(guards[0], resp.action)
+                        await self._emit_engine_events([self.engine.state.events[-1]])
+                        await self._broadcast_ai(guards[0], resp, "守卫守护目标")
+                        # 记忆：守卫守护记录
+                        t = self.engine.get_player(resp.action)
+                        self.memory.get(guards[0]).record_private(
+                            state.day_count, f"你守护了 {t.name if t else resp.action}")
+                    except ValueError as e:
+                        logger.warning(f"守卫行动非法被拒绝: {e}")
                 await self._delay(2)
 
         # 狼人（含狼王/白狼王）：内部讨论 + 共识刀人
@@ -397,6 +404,20 @@ class Room:
         while self.engine.state.pending_shoots and self.status != "finished":
             await self._check_pause()
             shooter, kind = self.engine.state.pending_shoots[0]
+            player = self.engine.get_player(shooter)
+            # 人类玩家：广播等待输入（简化：无输入时 120s 后放弃）
+            if player and player.player_type == "human":
+                self._pending_human_shoot = None
+                await self.broadcast("wait_human_shoot", {
+                    "player_id": shooter, "player_name": player.name,
+                })
+                await self._wait_for_human_input(shooter)
+                # 人类开枪：有输入则开枪，无输入则放弃（不会崩溃）
+                target = getattr(self, "_pending_human_shoot", None)
+                events = self.engine.process_shoot(shooter, target)
+                if await self._emit_engine_events(events):
+                    return
+                continue
             resp = await self._act(shooter, "decide_shoot")
             events = self.engine.process_shoot(shooter, resp.action)
             if await self._emit_engine_events(events):
@@ -592,8 +613,32 @@ class Room:
             self.engine.process_speech(player_id, content)
         elif input_type == "vote":
             self.engine.process_vote(player_id, content)
+        elif input_type == "shoot":
+            # 人类开枪：content 为座位号/玩家名，解析后开枪；空=放弃
+            target = self._resolve_human_target(content)
+            self._pending_human_shoot = target
         if self._wait_for_human and not self._wait_for_human.done():
             self._wait_for_human.set_result(True)
+
+    def _resolve_human_target(self, content: str) -> str:
+        """把人类输入解析为 player_id（座位号或名字）"""
+        if not self.engine:
+            return ""
+        content = content.strip()
+        if not content:
+            return ""  # 空输入 = 放弃
+        try:
+            seat = int(content)
+            for pid in self.engine.state.alive_players:
+                p = self.engine.get_player(pid)
+                if p and p.seat == seat:
+                    return pid
+        except ValueError:
+            for pid in self.engine.state.alive_players:
+                p = self.engine.get_player(pid)
+                if p and content in p.name:
+                    return pid
+        return ""
 
     async def _on_game_end(self):
         self.status = "finished"

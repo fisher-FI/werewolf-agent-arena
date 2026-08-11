@@ -18,6 +18,8 @@ export default function Room() {
   const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
+  const [humanAction, setHumanAction] = useState<any>(null);
+  const [humanInput, setHumanInput] = useState('');
   const [activeTab, setActiveTab] = useState<'timeline' | 'reasoning'>('timeline');
   const timelineRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
@@ -42,8 +44,13 @@ export default function Room() {
       switch (msg.type) {
         case 'room_state':
           setRoom(msg.data);
+          if (msg.data.phase) setPhase(msg.data.phase);
+          if (msg.data.day_count) setDayCount(msg.data.day_count);
           break;
         case 'game_event':
+          // 引擎阶段变化可能不带 phase_change 广播：从事件同步徽章
+          if (msg.data.phase && msg.data.phase !== phase) setPhase(msg.data.phase);
+          if (msg.data.day_count) setDayCount(msg.data.day_count);
           if (msg.data.event_type === 'player_death' && msg.data.player_id) {
             setRoom((prev: any) => {
               if (!prev) return prev;
@@ -94,6 +101,15 @@ export default function Room() {
           break;
         case 'current_speaker':
           setCurrentSpeaker(msg.data.player_id || null);
+          break;
+        case 'wait_human_speech':
+          setHumanAction({ type: 'speech', playerId: msg.data.player_id, playerName: msg.data.player_name });
+          break;
+        case 'wait_human_vote':
+          setHumanAction({ type: 'vote', playerId: msg.data.player_id, playerName: msg.data.player_name });
+          break;
+        case 'wait_human_shoot':
+          setHumanAction({ type: 'shoot', playerId: msg.data.player_id, playerName: msg.data.player_name });
           break;
       }
     });
@@ -192,6 +208,22 @@ export default function Room() {
       } else {
         await api.pauseGame(roomId);
       }
+    } catch (e: any) { alert(e.message); }
+  };
+
+  const submitHumanAction = async () => {
+    if (!roomId || !humanAction) return;
+    const typeMap: Record<string, string> = {
+      speech: 'speech', vote: 'vote', shoot: 'shoot',
+    };
+    try {
+      await api.humanInput(roomId, {
+        player_id: humanAction.playerId,
+        content: humanInput,
+        input_type: typeMap[humanAction.type] || 'speech',
+      });
+      setHumanAction(null);
+      setHumanInput('');
     } catch (e: any) { alert(e.message); }
   };
 
@@ -442,6 +474,26 @@ export default function Room() {
           {rightSeats.map(renderSeat)}
         </div>
       </div>
+
+      {/* 人类玩家输入条 */}
+      {humanAction && (
+        <div className="human-input-bar">
+          <span className="hib-label">
+            {humanAction.type === 'speech' && `🗣️ 请 ${humanAction.playerName} 发言：`}
+            {humanAction.type === 'vote' && `🗳️ 请 ${humanAction.playerName} 投票（输入座位号或名字，空=弃票）：`}
+            {humanAction.type === 'shoot' && `🔫 请 ${humanAction.playerName} 开枪（输入座位号或名字，空=放弃）：`}
+          </span>
+          <input
+            className="hib-input"
+            value={humanInput}
+            onChange={e => setHumanInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submitHumanAction()}
+            placeholder={humanAction.type === 'speech' ? '输入你的发言...' : '目标座位号'}
+            autoFocus
+          />
+          <button className="btn-primary btn-sm" onClick={submitHumanAction}>发送</button>
+        </div>
+      )}
 
       {/* 底部：选中玩家详情 / 游戏结束 */}
       {(selectedPlayer && playerMap[selectedPlayer]) ? (
