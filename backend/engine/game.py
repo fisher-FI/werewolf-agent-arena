@@ -423,6 +423,8 @@ class GameEngine:
         events = []
         if not self.state.vote_results:
             events.append(self.emit(EventType.SYSTEM, content="无人投票"))
+            self._open_night(events)
+            self.state._after_vote = False
             return events
 
         counts = Counter(self.state.vote_results.values())
