@@ -541,3 +541,47 @@
   opacity: 0.4;
   text-decoration: line-through;
 }
+
+/* ── 克制动画：事件淡入、死亡过渡、推理滑入 ── */
+.timeline-event {
+  animation: evt-fadein 0.35s ease-out;
+}
+@keyframes evt-fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.seat-slot {
+  transition: opacity 0.4s ease, filter 0.4s ease, border-color 0.3s ease;
+}
+.seat-slot.dead {
+  opacity: 0.45;
+  filter: grayscale(0.85);
+}
+
+.reasoning-card {
+  animation: reason-slidein 0.3s ease-out;
+}
+@keyframes reason-slidein {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.vote-arrow {
+  display: inline-block;
+  animation: vote-nudge 0.6s ease-in-out infinite;
+}
+@keyframes vote-nudge {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(3px); }
+}
+
+.evt-wolf-discuss {
+  border-left: 3px solid rgba(248,113,113,0.5);
+  background: rgba(248,113,113,0.06);
+}
+.evt-lovers { border-left: 3px solid rgba(236,72,153,0.5); }
+.evt-explode { border-left: 3px solid rgba(245,158,11,0.6); }
+.evt-idiot { border-left: 3px solid rgba(244,114,182,0.5); }
+.evt-knight { border-left: 3px solid rgba(234,179,8,0.5); }
+.evt-guard { border-left: 3px solid rgba(148,163,184,0.5); }
