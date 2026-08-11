@@ -18,6 +18,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from engine.models import Player, AIConfig, Role
+from engine.boards import BOARDS, get_board
 from ai.orchestrator import Room, RoomManager
 
 logging.basicConfig(level=logging.INFO)
@@ -49,7 +50,7 @@ if os.path.isdir(static_dir):
 # ─── Pydantic 模型 ───
 
 class CreateRoomReq(BaseModel):
-    pass
+    board_id: Optional[str] = None
 
 class AddPlayerReq(BaseModel):
     name: str
@@ -103,9 +104,21 @@ async def update_default_ai_config(req: UpdateAIConfigReq):
 
 
 @app.post("/api/rooms")
-async def create_room():
-    room = manager.create_room()
+async def create_room(req: CreateRoomReq = None):
+    req = req or CreateRoomReq()
+    room = manager.create_room(req.board_id)
     return room.to_dict()
+
+
+@app.get("/api/boards")
+async def list_boards():
+    """列出可用板子配置"""
+    return [
+        {"id": b.id, "name": b.name, "desc": b.desc,
+         "player_count": b.player_count,
+         "roles": [r.value for r in b.roles]}
+        for b in BOARDS.values()
+    ]
 
 
 @app.get("/api/rooms")
@@ -174,8 +187,8 @@ async def start_game(room_id: str):
     room = manager.get_room(room_id)
     if not room:
         raise HTTPException(404, "Room not found")
-    if len(room.players) < 6:
-        raise HTTPException(400, "至少需要6个玩家")
+    if len(room.players) != room.max_players:
+        raise HTTPException(400, f"板子 {room.board.name} 需要 {room.max_players} 个玩家，当前 {len(room.players)} 人")
     # 初始化 AI 适配器
     room.setup_ai_adapters(manager.default_ai_config)
     # 启动游戏（后台任务）

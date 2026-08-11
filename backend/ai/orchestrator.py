@@ -1,19 +1,22 @@
-"""房间管理 & AI 调度器 — 协调游戏流程"""
+"""房间管理 & AI 调度器 — 协调游戏流程（支持任意板子/人数）"""
 
 from __future__ import annotations
 import asyncio
 import json
+import random
 import uuid
 import logging
+from collections import Counter
 from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from engine.models import (
-    Player, Role, Team, GamePhase, EventType, GameEvent, AIConfig
+    Player, Role, Team, GamePhase, EventType, GameEvent, AIConfig,
 )
 from engine.game import GameEngine
+from engine.boards import Board, get_board
 from ai.adapter import AIAdapter, AIResponse
 
 logger = logging.getLogger("werewolf.room")
@@ -22,33 +25,41 @@ logger = logging.getLogger("werewolf.room")
 class Room:
     """游戏房间"""
 
-    def __init__(self, room_id: str = None):
+    def __init__(self, room_id: str = None, board_id: str = None):
         self.id = room_id or uuid.uuid4().hex[:8]
+        self.board: Board = get_board(board_id)
         self.players: list[Player] = []
         self.engine: Optional[GameEngine] = None
-        self.adapters: dict[str, AIAdapter] = {}   # player_id -> adapter
-        self.status: str = "waiting"               # waiting / playing / finished
-        self.paused: bool = False                    # 暂停状态
+        self.adapters: dict[str, AIAdapter] = {}
+        self.status: str = "waiting"
+        self.paused: bool = False
         self.speaker_order: list[str] = []
         self.current_speaker_idx: int = 0
-        self._ws_broadcast = None                  # WebSocket 广播回调
+        self._ws_broadcast = None
         self._wait_for_human: Optional[asyncio.Future] = None
-        self.game_events: list[dict] = []           # 存储所有游戏事件（用于回放）
-        self.game_reasonings: list[dict] = []       # 存储所有AI推理（用于回放）
-        self.connected_clients: int = 0             # 当前连接的客户端数
+        self.game_events: list[dict] = []
+        self.game_reasonings: list[dict] = []
+        self.connected_clients: int = 0
+        self.delay_factor: float = 1.0   # 测试置 0 可加速
+
+    # ─── 基础 ───
+
+    @property
+    def max_players(self) -> int:
+        return self.board.player_count
+
+    async def _delay(self, seconds: float):
+        """模拟节奏延迟（测试可置 0）"""
+        await asyncio.sleep(seconds * self.delay_factor)
 
     async def _check_pause(self):
-        """暂停时等待，直到恢复"""
         while self.paused:
             await asyncio.sleep(0.5)
 
     def set_broadcast(self, callback):
-        """设置 WebSocket 广播回调"""
         self._ws_broadcast = callback
 
     async def broadcast(self, event_type: str, data: dict):
-        """广播消息到所有客户端，同时存储用于回放"""
-        # 存储游戏事件和推理
         if event_type == "game_event":
             self.game_events.append(data)
         elif event_type == "ai_reasoning":
@@ -63,66 +74,53 @@ class Room:
             })
         elif event_type == "role_assigned":
             self.game_events.append({"event_type": "_role", **data})
-
         if self._ws_broadcast:
             await self._ws_broadcast(event_type, data)
 
     async def send_history(self, ws):
-        """向新连接的客户端发送历史事件"""
-        # 发送角色信息
         if self.engine and self.engine.state.roles:
             for pid, role in self.engine.state.roles.items():
                 try:
                     await ws.send_text(json.dumps({
                         "type": "role_assigned",
                         "data": {
-                            "player_id": pid,
-                            "role": role.value,
-                            "role_label": role.label,
-                            "role_emoji": role.emoji,
+                            "player_id": pid, "role": role.value,
+                            "role_label": role.label, "role_emoji": role.emoji,
                             "team": role.team.value,
                         }
                     }, ensure_ascii=False))
                 except Exception:
                     pass
-
-        # 发送所有历史事件
         for evt in self.game_events:
-            # 跳过角色事件（已通过 role_assigned 发送）
             if evt.get("event_type") == "_role":
                 continue
             try:
                 await ws.send_text(json.dumps({
-                    "type": "game_event",
-                    "data": evt,
+                    "type": "game_event", "data": evt,
                 }, ensure_ascii=False))
             except Exception:
                 pass
-
-        # 发送所有历史推理
         for r in self.game_reasonings:
             try:
                 await ws.send_text(json.dumps({
-                    "type": "ai_reasoning",
-                    "data": r,
+                    "type": "ai_reasoning", "data": r,
                 }, ensure_ascii=False))
             except Exception:
                 pass
-
-        # 发送当前暂停状态
         if self.paused:
             try:
                 await ws.send_text(json.dumps({
-                    "type": "game_paused",
-                    "data": {"paused": True},
+                    "type": "game_paused", "data": {"paused": True},
                 }, ensure_ascii=False))
             except Exception:
                 pass
 
     def add_player(self, player: Player) -> bool:
-        if len(self.players) >= 9:
+        if len(self.players) >= self.max_players:
             return False
         if self.status != "waiting":
+            return False
+        if any(p.seat == player.seat for p in self.players):
             return False
         self.players.append(player)
         return True
@@ -131,131 +129,241 @@ class Room:
         self.players = [p for p in self.players if p.id != player_id]
 
     def setup_ai_adapters(self, default_config: AIConfig):
-        """为所有 AI 玩家创建适配器"""
         for p in self.players:
             if p.player_type == "ai":
                 config = p.ai_config or default_config
                 self.adapters[p.id] = AIAdapter(config)
 
-    async def start_game(self):
-        """开始游戏"""
-        if len(self.players) < 6:
-            raise ValueError("至少需要6个玩家")
+    # ─── 通用工具 ───
 
-        self.status = "playing"
-        self.engine = GameEngine(self.players)
-        self.engine.assign_roles()
+    def _alive_names(self) -> str:
+        names = []
+        for pid in self.engine.state.alive_players:
+            p = self.engine.get_player(pid)
+            names.append(f"{p.seat}号({p.name})" if p else pid)
+        return ", ".join(names)
 
-        # 广播游戏开始
-        await self.broadcast("game_start", {
-            "room_id": self.id,
-            "players": [p.to_public_dict() for p in self.players],
+    async def _act(self, player_id: str, method: str, *args) -> AIResponse:
+        """带暂停检查的 AI 行动调用"""
+        await self._check_pause()
+        resp = await getattr(self.adapters[player_id], method)(self.engine, player_id, *args)
+        return resp
+
+    async def _broadcast_ai(self, player_id: str, resp: AIResponse, action_desc: str = ""):
+        p = self.engine.get_player(player_id)
+        await self.broadcast("ai_reasoning", {
+            "player_id": player_id,
+            "player_name": p.name if p else "",
+            "reasoning": resp.reasoning,
+            "speech": resp.content,
+            "thinking_time": resp.thinking_time,
+            "confidence": resp.confidence,
+            "action": action_desc,
         })
 
-        # 通知每个玩家他们的角色（私密）
-        for p in self.players:
-            role = self.engine.state.roles.get(p.id)
-            if role:
-                await self.broadcast("role_assigned", {
-                    "player_id": p.id,
-                    "role": role.value,
-                    "role_label": role.label,
-                    "role_emoji": role.emoji,
-                    "team": role.team.value,
-                })
-
-        # 开始第一晚
-        await self._run_night()
-
-    async def _run_night(self):
-        """执行夜间阶段"""
-        self.engine.start_night()
-        await self.broadcast("phase_change", {
-            "phase": "night",
-            "day_count": self.engine.state.day_count,
-            "content": f"第{self.engine.state.day_count}个夜晚降临了…所有人闭眼。",
-        })
-        await asyncio.sleep(2)
-
-        state = self.engine.state
-
-        # 狼人行动
-        wolves = self.engine.get_alive_werewolves()
-        if wolves:
-            await self._check_pause()
-            wolf_id = wolves[0]  # 由第一个狼人代表发言
-            if wolf_id in self.adapters:
-                resp = await self.adapters[wolf_id].decide_night_action(self.engine, wolf_id)
-                if resp.action:
-                    self.engine.process_werewolf_kill(resp.action)
-                    target = self.engine.get_player(resp.action)
-                    await self.broadcast("ai_reasoning", {
-                        "player_id": wolf_id,
-                        "player_name": self.engine.get_player(wolf_id).name,
-                        "reasoning": resp.reasoning,
-                        "thinking_time": resp.thinking_time,
-                        "confidence": resp.confidence,
-                        "action": "狼人选择击杀目标",
-                    })
-            await asyncio.sleep(3)
-
-        # 预言家行动
-        seers = [pid for pid in state.alive_players
-                 if state.roles.get(pid) == Role.SEER]
-        if seers:
-            await self._check_pause()
-            seer_id = seers[0]
-            if seer_id in self.adapters:
-                resp = await self.adapters[seer_id].decide_night_action(self.engine, seer_id)
-                if resp.action:
-                    check_result = self.engine.process_seer_check(seer_id, resp.action)
-                    await self.broadcast("ai_reasoning", {
-                        "player_id": seer_id,
-                        "player_name": self.engine.get_player(seer_id).name,
-                        "reasoning": resp.reasoning,
-                        "thinking_time": resp.thinking_time,
-                        "confidence": resp.confidence,
-                        "action": "预言家查验了目标",
-                    })
-            await asyncio.sleep(3)
-
-        # 女巫行动
-        witches = [pid for pid in state.alive_players
-                   if state.roles.get(pid) == Role.WITCH]
-        if witches:
-            await self._check_pause()
-            witch_id = witches[0]
-            if witch_id in self.adapters:
-                resp = await self.adapters[witch_id].decide_night_action(self.engine, witch_id)
-                # 分析女巫的决定
-                save = "救" in resp.content or "解药" in resp.content
-                poison_target = resp.action if resp.action and "毒" in resp.content else None
-                self.engine.process_witch_action(witch_id, save=save, poison_target=poison_target)
-                await self.broadcast("ai_reasoning", {
-                    "player_id": witch_id,
-                    "player_name": self.engine.get_player(witch_id).name,
-                    "reasoning": resp.reasoning,
-                    "thinking_time": resp.thinking_time,
-                    "confidence": resp.confidence,
-                    "action": "女巫做出决定",
-                })
-            await asyncio.sleep(3)
-
-        # 结算夜晚
-        events = self.engine.resolve_night()
+    async def _emit_engine_events(self, events: list):
+        """广播引擎事件，遇 GAME_END 结束游戏"""
         for event in events:
             await self.broadcast("game_event", event.to_dict())
             if event.event_type == EventType.GAME_END:
                 await self._on_game_end()
-                return
+                return True
+        return False
 
-        # 进入白天讨论
-        await asyncio.sleep(1)
+    # ─── 游戏主流程 ───
+
+    async def start_game(self):
+        if len(self.players) != self.max_players:
+            raise ValueError(f"板子 {self.board.name} 需要 {self.max_players} 人，当前 {len(self.players)} 人")
+        self.status = "playing"
+        self.engine = GameEngine(self.players, self.board)
+        self.engine.assign_roles()
+
+        await self.broadcast("game_start", {
+            "room_id": self.id,
+            "board": {"id": self.board.id, "name": self.board.name},
+            "players": [p.to_public_dict() for p in self.players],
+        })
+        for p in self.players:
+            role = self.engine.state.roles.get(p.id)
+            if role:
+                await self.broadcast("role_assigned", {
+                    "player_id": p.id, "role": role.value,
+                    "role_label": role.label, "role_emoji": role.emoji,
+                    "team": role.team.value,
+                })
+
+        self.engine.start_game()
+        await self.broadcast("phase_change", {
+            "phase": "night", "day_count": 1,
+            "content": f"游戏开始！板子：{self.board.name}（{self.max_players}人局）",
+        })
+        await self._delay(2)
+        await self._run_night()
+
+    # ─── 夜晚 ───
+
+    async def _run_night(self):
+        """按板子 night_order 调度夜晚行动"""
         await self._check_pause()
+        state = self.engine.state
+        order = self.board.night_order
+
+        # 首夜丘比特连人
+        if self.board.first_night_cupid and state.day_count == 1:
+            cupids = self.engine.alive_role(Role.CUPID)
+            if cupids:
+                resp = await self._act(cupids[0], "decide_night_action")
+                target = self._resolve_cupid_target(resp, cupids[0])
+                if target and len(target) == 2:
+                    self.engine.process_cupid_chain(cupids[0], target[0], target[1])
+                    await self._emit_engine_events([self.engine.state.events[-1]])
+                await self._delay(2)
+
+        # 守卫守人
+        if "guard" in order:
+            guards = self.engine.alive_role(Role.GUARD)
+            if guards:
+                resp = await self._act(guards[0], "decide_night_action")
+                if resp.action:
+                    self.engine.process_guard_protect(guards[0], resp.action)
+                    await self._emit_engine_events([self.engine.state.events[-1]])
+                    await self._broadcast_ai(guards[0], resp, "守卫守护目标")
+                await self._delay(2)
+
+        # 狼人（含狼王/白狼王）：内部讨论 + 共识刀人
+        wolves = self.engine.get_alive_werewolves()
+        if wolves and "wolf" in order:
+            await self._run_wolf_night(wolves)
+
+        # 女巫
+        if "witch" in order:
+            witches = self.engine.alive_role(Role.WITCH)
+            if witches:
+                resp = await self._act(witches[0], "decide_night_action")
+                self.engine.process_witch_action(
+                    witches[0], save=resp.save, poison_target=resp.poison_target)
+                for e in self.engine.state.events[-2:]:
+                    await self._emit_engine_events([e])
+                await self._broadcast_ai(witches[0], resp, "女巫行动")
+                await self._delay(2)
+
+        # 预言家
+        if "seer" in order:
+            seers = self.engine.alive_role(Role.SEER)
+            if seers:
+                resp = await self._act(seers[0], "decide_night_action")
+                if resp.action:
+                    self.engine.process_seer_check(seers[0], resp.action)
+                    await self._emit_engine_events([self.engine.state.events[-1]])
+                    await self._broadcast_ai(seers[0], resp, "预言家查验")
+                await self._delay(2)
+
+        # 结算夜晚
+        await self._check_pause()
+        events = self.engine.resolve_night()
+        if await self._emit_engine_events(events):
+            return
+        await self._handle_shoot_window()
+        if self.status == "finished":
+            return
+        await self._delay(1)
         await self._run_discussion()
 
+    async def _run_wolf_night(self, wolves: list):
+        """狼人内部讨论：提案 → 汇总 → 必要时最终票 → 多数票共识"""
+        if len(wolves) == 1:
+            resp = await self._act(wolves[0], "decide_night_action")
+            if resp.action:
+                self.engine.process_werewolf_kill(resp.action)
+                await self._broadcast_ai(wolves[0], resp, "狼人选择击杀目标")
+            await self._delay(2)
+            return
+
+        # 第 1 轮：独立提案
+        proposals = {}
+        for wolf_id in wolves:
+            resp = await self._act(wolf_id, "decide_night_action")
+            proposals[wolf_id] = resp.action
+            await self._broadcast_ai(wolf_id, resp, "狼人提案")
+
+        def majority(votes: dict) -> Optional[str]:
+            counts = Counter(v for v in votes.values() if v)
+            if not counts:
+                return None
+            top = counts.most_common()
+            if len(top) == 1 or top[0][1] > top[1][1]:
+                return top[0][0]
+            return None
+
+        consensus = majority(proposals)
+
+        # 第 2 轮：汇总队友倾向，投最终票
+        if consensus is None:
+            summary = self._summarize_proposals(proposals)
+            final_votes = {}
+            for wolf_id in wolves:
+                resp = await self._act(wolf_id, "decide_final_wolf_vote", summary)
+                final_votes[wolf_id] = resp.action
+                await self._broadcast_ai(wolf_id, resp, "狼人最终投票")
+            consensus = majority(final_votes)
+            if consensus is None:  # 仍平票 → 第一只狼定夺
+                consensus = final_votes.get(wolves[0]) or random.choice(
+                    [v for v in final_votes.values() if v] or [wolves[0]])
+
+        if consensus:
+            self.engine.process_werewolf_kill(consensus)
+            await self._emit_engine_events([self.engine.state.events[-1]])
+        await self._delay(2)
+
+    def _summarize_proposals(self, proposals: dict) -> str:
+        parts = []
+        for wolf_id, target in proposals.items():
+            name = self.engine.get_player(wolf_id).name
+            tname = self.engine.get_player(target).name if target and target in self.engine.players else "（弃刀）"
+            parts.append(f"{name} 建议击杀 {tname}")
+        return "；".join(parts)
+
+    def _resolve_cupid_target(self, resp: AIResponse, cupid_id: str) -> list:
+        """解析丘比特选择（从 metadata 里的两个座位）"""
+        ids = resp.metadata.get("lovers", []) if resp.metadata else []
+        resolved = [self._seat_to_id(x) for x in ids if x]
+        alive = [p for p in self.engine.state.alive_players
+                 if p != cupid_id]
+        resolved = [p for p in resolved if p in alive]
+        return resolved[:2] if len(resolved) == 2 else []
+
+    def _seat_to_id(self, target) -> str:
+        if target in self.engine.players:
+            return target
+        try:
+            seat = int(target)
+            for pid in self.engine.state.alive_players:
+                p = self.engine.get_player(pid)
+                if p and p.seat == seat:
+                    return pid
+        except (ValueError, TypeError):
+            pass
+        return ""
+
+    # ─── 开枪窗口（猎人/狼王） ───
+
+    async def _handle_shoot_window(self):
+        """处理 pending_shoots 队列（可能多人在队列）"""
+        while self.engine.state.pending_shoots and self.status != "finished":
+            await self._check_pause()
+            shooter, kind = self.engine.state.pending_shoots[0]
+            resp = await self._act(shooter, "decide_shoot")
+            events = self.engine.process_shoot(shooter, resp.action)
+            if await self._emit_engine_events(events):
+                return
+            await self._broadcast_ai(shooter, resp, "开枪/带人")
+            await self._delay(2)
+
+    # ─── 白天 ───
+
     async def _run_discussion(self):
-        """执行白天讨论"""
+        await self._check_pause()
         await self.broadcast("phase_change", {
             "phase": "day_discuss",
             "day_count": self.engine.state.day_count,
@@ -268,112 +376,116 @@ class Room:
         for speaker_id in self.speaker_order:
             if speaker_id not in self.engine.state.alive_players:
                 continue
-
             player = self.engine.get_player(speaker_id)
             if not player:
                 continue
 
-            # 广播当前发言者
             await self.broadcast("current_speaker", {
-                "player_id": speaker_id,
-                "player_name": player.name,
-                "action": "speaking",
+                "player_id": speaker_id, "player_name": player.name, "action": "speaking",
             })
 
             if player.player_type == "ai" and speaker_id in self.adapters:
-                await self._check_pause()
-                # AI 发言
-                resp = await self.adapters[speaker_id].make_speech(self.engine, speaker_id)
+                resp = await self._act(speaker_id, "make_speech")
                 event = self.engine.process_speech(speaker_id, resp.content, resp.reasoning)
                 await self.broadcast("game_event", event.to_dict())
-                await self.broadcast("ai_reasoning", {
-                    "player_id": speaker_id,
-                    "player_name": player.name,
-                    "reasoning": resp.reasoning,
-                    "speech": resp.content,
-                    "thinking_time": resp.thinking_time,
-                    "confidence": resp.confidence,
-                })
+                await self._broadcast_ai(speaker_id, resp)
             elif player.player_type == "human":
-                # 等待人类玩家发言
                 await self.broadcast("wait_human_speech", {
-                    "player_id": speaker_id,
-                    "player_name": player.name,
+                    "player_id": speaker_id, "player_name": player.name,
                 })
                 await self._wait_for_human_input(speaker_id)
+            await self._delay(2)
 
-            await asyncio.sleep(3)
-
-        # 发言结束，清除高亮
         await self.broadcast("current_speaker", {"player_id": None, "action": "done"})
 
-        # 进入投票
+        # 狼王/白狼王自爆窗口
         await self._check_pause()
+        if self.status != "finished":
+            await self._run_explode_window()
+        if self.status == "finished":
+            return
+
+        # 骑士决斗窗口
+        await self._check_pause()
+        if self.status != "finished":
+            await self._run_knight_window()
+        if self.status == "finished":
+            return
+
         await self._run_vote()
 
+    async def _run_explode_window(self):
+        """狼王/白狼王可自爆（简化：由第一只存活狼王/白狼王决策）"""
+        state = self.engine.state
+        for pid in list(state.alive_players):
+            role = Role(state.roles.get(pid))
+            if role in (Role.ALPHA_WOLF, Role.WHITE_WOLF_KING) and pid in self.adapters:
+                resp = await self._act(pid, "decide_explode")
+                if resp.action == "__explode__":
+                    events = self.engine.process_self_explode(pid, resp.poison_target)
+                    await self._emit_engine_events(events)
+                    await self._broadcast_ai(pid, resp, "自爆")
+                    return
+                elif resp.action == "__explode_and_take__":
+                    events = self.engine.process_self_explode(pid, resp.poison_target)
+                    await self._emit_engine_events(events)
+                    await self._broadcast_ai(pid, resp, "自爆带人")
+                    return
+
+    async def _run_knight_window(self):
+        """骑士决斗（可弃）"""
+        state = self.engine.state
+        for pid in list(state.alive_players):
+            if Role(state.roles.get(pid)) == Role.KNIGHT and pid in self.adapters:
+                resp = await self._act(pid, "decide_duel")
+                if resp.action:
+                    events = self.engine.process_knight_duel(pid, resp.action)
+                    await self._emit_engine_events(events)
+                    await self._broadcast_ai(pid, resp, "骑士决斗")
+                return
+
     async def _run_vote(self):
-        """执行投票阶段"""
+        await self._check_pause()
+        self.engine.start_vote()
         await self.broadcast("phase_change", {
             "phase": "day_vote",
             "day_count": self.engine.state.day_count,
             "content": f"第{self.engine.state.day_count}天，投票阶段开始。",
         })
 
-        # AI 投票
         for pid in self.engine.state.alive_players:
             player = self.engine.get_player(pid)
             if not player:
                 continue
-
-            # 广播当前投票者
             await self.broadcast("current_speaker", {
-                "player_id": pid,
-                "player_name": player.name,
-                "action": "voting",
+                "player_id": pid, "player_name": player.name, "action": "voting",
             })
-
             if player.player_type == "ai" and pid in self.adapters:
-                await self._check_pause()
-                resp = await self.adapters[pid].cast_vote(self.engine, pid)
+                resp = await self._act(pid, "cast_vote")
                 if resp.action:
                     self.engine.process_vote(pid, resp.action)
-                    await self.broadcast("game_event",
-                        self.engine.state.events[-1].to_dict())
-                    await self.broadcast("ai_reasoning", {
-                        "player_id": pid,
-                        "player_name": player.name,
-                        "reasoning": resp.reasoning,
-                        "thinking_time": resp.thinking_time,
-                        "confidence": resp.confidence,
-                        "action": "投票",
-                    })
+                    await self.broadcast("game_event", self.engine.state.events[-1].to_dict())
+                    await self._broadcast_ai(pid, resp, "投票")
             elif player.player_type == "human":
                 await self.broadcast("wait_human_vote", {
-                    "player_id": pid,
-                    "player_name": player.name,
+                    "player_id": pid, "player_name": player.name,
                 })
                 await self._wait_for_human_input(pid)
+            await self._delay(1.5)
 
-            await asyncio.sleep(2)
-
-        # 投票结束，清除高亮
         await self.broadcast("current_speaker", {"player_id": None, "action": "done"})
 
-        # 结算投票
         await self._check_pause()
         events = self.engine.resolve_votes()
-        for event in events:
-            await self.broadcast("game_event", event.to_dict())
-            if event.event_type == EventType.GAME_END:
-                await self._on_game_end()
-                return
-
-        # 继续下一个夜晚
-        await asyncio.sleep(2)
+        if await self._emit_engine_events(events):
+            return
+        await self._handle_shoot_window()
+        if self.status == "finished":
+            return
+        await self._delay(2)
         await self._run_night()
 
     async def _wait_for_human_input(self, player_id: str):
-        """等待人类玩家输入"""
         loop = asyncio.get_event_loop()
         self._wait_for_human = loop.create_future()
         try:
@@ -383,17 +495,14 @@ class Room:
         self._wait_for_human = None
 
     def receive_human_input(self, player_id: str, content: str, input_type: str = "speech"):
-        """接收人类玩家输入"""
         if input_type == "speech":
             self.engine.process_speech(player_id, content)
         elif input_type == "vote":
             self.engine.process_vote(player_id, content)
-
         if self._wait_for_human and not self._wait_for_human.done():
             self._wait_for_human.set_result(True)
 
     async def _on_game_end(self):
-        """游戏结束处理"""
         self.status = "finished"
         state = self.engine.state
         roles_reveal = {
@@ -406,7 +515,9 @@ class Room:
         }
         await self.broadcast("game_end", {
             "winner": state.winner.value if state.winner else None,
-            "winner_label": "好人阵营" if state.winner == Team.VILLAGER else "狼人阵营",
+            "winner_label": "❤️情侣阵营" if state.winner == Team.LOVERS
+                            else "好人阵营" if state.winner == Team.VILLAGER else "狼人阵营",
+            "winner_reason": state.winner_reason,
             "roles": roles_reveal,
         })
 
@@ -414,11 +525,11 @@ class Room:
         d = {
             "id": self.id,
             "status": self.status,
+            "board": {"id": self.board.id, "name": self.board.name, "max_players": self.max_players},
             "players": [p.to_dict() for p in self.players],
             "player_count": len(self.players),
             "paused": self.paused,
         }
-        # 添加当前游戏阶段信息
         if self.engine:
             d["phase"] = self.engine.state.phase.value
             d["day_count"] = self.engine.state.day_count
@@ -439,8 +550,8 @@ class RoomManager:
             personality="一个聪明、善于推理的玩家",
         )
 
-    def create_room(self) -> Room:
-        room = Room()
+    def create_room(self, board_id: str = None) -> Room:
+        room = Room(board_id=board_id)
         self.rooms[room.id] = room
         return room
 

@@ -321,10 +321,13 @@ class GameEngine:
         # 还有待开枪的继续留在 SHOOT，否则进入下一阶段
         if not self.state.pending_shoots:
             if self.state.phase == GamePhase.SHOOT:
-                if self.state.day_count == 0 or self._just_voted():
-                    self._open_day(events)
-                else:
+                if self._just_voted():
+                    # 投票后的开枪窗口 → 进入夜晚
                     self._open_night(events)
+                    self.state._after_vote = False
+                else:
+                    # 夜晚结算后的开枪窗口 → 进入白天
+                    self._open_day(events)
         return events
 
     def _just_voted(self) -> bool:
@@ -394,6 +397,14 @@ class GameEngine:
         if winner:
             events += self.end_game(winner)
         return events
+
+    def start_vote(self) -> GameEvent:
+        """白天讨论结束 → 进入投票阶段"""
+        self._transition(GamePhase.DAY_VOTE)
+        return self.emit(
+            EventType.PHASE_CHANGE,
+            content=f"第{self.state.day_count}天投票开始。",
+        )
 
     def process_vote(self, voter_id: str, target_id: str) -> GameEvent:
         self.state.vote_results[voter_id] = target_id
