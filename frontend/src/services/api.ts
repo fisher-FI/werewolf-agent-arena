@@ -19,7 +19,11 @@ export const api = {
 
   // Rooms
   listRooms: () => fetchJSON('/api/rooms'),
-  createRoom: () => fetchJSON('/api/rooms', { method: 'POST' }),
+  listBoards: () => fetchJSON('/api/boards'),
+  createRoom: (boardId?: string) => fetchJSON('/api/rooms', {
+    method: 'POST',
+    body: JSON.stringify(boardId ? { board_id: boardId } : {}),
+  }),
   getRoom: (id: string) => fetchJSON(`/api/rooms/${id}`),
   deleteRoom: (id: string) => fetchJSON(`/api/rooms/${id}`, { method: 'DELETE' }),
 

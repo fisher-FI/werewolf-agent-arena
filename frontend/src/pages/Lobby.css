@@ -86,3 +86,39 @@
   color: var(--text-tertiary);
   font-size: 13px;
 }
+
+/* ── 板子选择（简单样式） ── */
+.board-picker {
+  max-width: 720px;
+  margin: 24px auto 0;
+  padding: 20px;
+  background: var(--surface, rgba(255,255,255,0.04));
+  border-radius: 12px;
+}
+.board-picker h2 { margin-bottom: 12px; font-size: 16px; }
+.board-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.board-card {
+  padding: 12px 14px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.board-card:hover { border-color: rgba(255,255,255,0.3); }
+.board-card.active {
+  border-color: #f5b84c;
+  background: rgba(245,184,76,0.1);
+}
+.board-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.board-desc { font-size: 12px; color: var(--text-muted, #999); margin-bottom: 6px; }
+.board-count { font-size: 11px; color: #f5b84c; }
+.room-board {
+  font-size: 12px; color: #f5b84c;
+  background: rgba(245,184,76,0.1);
+  padding: 2px 8px; border-radius: 999px;
+}
