@@ -13,6 +13,8 @@
 
 🚧 规划中 —— 详见 [docs/open-source-references.md](docs/open-source-references.md)（已调研的开源项目）
 
+📐 **实现架构图**：[docs/architecture.md](docs/architecture.md)（Mermaid）
+
 ## 目录结构
 
 ```

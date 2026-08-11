@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狼人杀 Agent 竞技场 · 架构图</title>
+<style>
+  :root {
+    --bg0: #070b16;
+    --bg1: #0c1224;
+    --panel: rgba(20, 28, 50, 0.75);
+    --panel-hi: rgba(30, 40, 68, 0.9);
+    --line: rgba(120, 150, 220, 0.14);
+    --txt: #e8ecf8;
+    --txt-dim: #8b96b5;
+    --amber: #f5b84c;
+    --amber-glow: rgba(245, 184, 76, 0.45);
+    --cyan: #4cc9f0;
+    --cyan-glow: rgba(76, 201, 240, 0.4);
+    --violet: #a78bfa;
+    --green: #5eead4;
+    --pink: #f472b6;
+    --red: #f87171;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(76, 201, 240, 0.10), transparent 60%),
+      radial-gradient(1000px 500px at 85% 0%, rgba(167, 139, 250, 0.10), transparent 55%),
+      radial-gradient(900px 700px at 50% 110%, rgba(245, 184, 76, 0.06), transparent 60%),
+      var(--bg0);
+    color: var(--txt);
+    min-height: 100vh;
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; }
+
+  /* ── Hero ─────────────────────────── */
+  .hero { text-align: center; margin-bottom: 48px; position: relative; }
+  .hero .kicker {
+    display: inline-block; font-size: 12px; letter-spacing: 3px; color: var(--cyan);
+    border: 1px solid rgba(76,201,240,.35); border-radius: 999px; padding: 6px 16px;
+    background: rgba(76,201,240,.07); margin-bottom: 18px; text-transform: uppercase;
+  }
+  .hero h1 {
+    font-size: 44px; font-weight: 800; letter-spacing: 1px;
+    background: linear-gradient(92deg, #f5b84c 0%, #f8e3b0 28%, #4cc9f0 62%, #a78bfa 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 60px rgba(76,201,240,.25);
+  }
+  .hero .sub { margin-top: 14px; color: var(--txt-dim); font-size: 15px; letter-spacing: .5px; }
+  .hero .sub b { color: var(--txt); font-weight: 600; }
+
+  /* ── 层容器 ───────────────────────── */
+  .layer {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 20px 22px 22px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+  }
+  .layer-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .layer-num {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    font-size: 14px; font-weight: 700; color: #0b1020; flex-shrink: 0;
+  }
+  .layer-title { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+  .layer-title-en { font-size: 11px; color: var(--txt-dim); letter-spacing: 2px; margin-left: 10px; text-transform: uppercase; }
+  .layer-tag {
+    margin-left: auto; font-size: 11px; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--txt-dim); background: rgba(255,255,255,.03);
+    letter-spacing: 1px;
+  }
+
+  /* 层色 */
+  .L1 .layer-num { background: linear-gradient(135deg, #f472b6, #fb7185); }
+  .L1 { border-top: 2px solid rgba(244,114,182,.6); }
+  .L2 .layer-num { background: linear-gradient(135deg, #f5b84c, #f97316); }
+  .L2 { border-top: 2px solid rgba(245,184,76,.6); }
+  .L3 .layer-num { background: linear-gradient(135deg, #4cc9f0, #38bdf8); }
+  .L3 { border-top: 2px solid rgba(76,201,240,.6); }
+  .L4 .layer-num { background: linear-gradient(135deg, #a78bfa, #8b5cf6); }
+  .L4 { border-top: 2px solid rgba(167,139,250,.6); }
+  .L5 .layer-num { background: linear-gradient(135deg, #5eead4, #2dd4bf); }
+  .L5 { border-top: 2px solid rgba(94,234,212,.6); }
+  .L6 .layer-num { background: linear-gradient(135deg, #94a3b8, #64748b); }
+  .L6 { border-top: 2px solid rgba(148,163,184,.6); }
+
+  /* ── 卡片 ─────────────────────────── */
+  .cards { display: flex; flex-wrap: wrap; gap: 14px; }
+  .card {
+    flex: 1 1 180px; min-width: 160px;
+    background: linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.015));
+    border: 1px solid var(--line); border-radius: 13px;
+    padding: 14px 14px 12px; position: relative; overflow: hidden;
+    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(255,255,255,.28);
+    box-shadow: 0 8px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .card .ic { font-size: 21px; line-height: 1; margin-bottom: 9px; display: block; filter: drop-shadow(0 0 10px rgba(255,255,255,.15)); }
+  .card .t { font-size: 13.5px; font-weight: 650; letter-spacing: .4px; }
+  .card .d { font-size: 11px; color: var(--txt-dim); margin-top: 5px; line-height: 1.55; }
+  .card .sub-badge {
+    display: inline-block; margin-top: 8px; font-size: 10px; padding: 2px 8px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--txt-dim);
+    background: rgba(255,255,255,.03);
+  }
+  .card.accent-a { border-color: rgba(245,184,76,.35); }
+  .card.accent-b { border-color: rgba(76,201,240,.35); }
+  .card.accent-c { border-color: rgba(167,139,250,.35); }
+
+  /* ── 层间连接线 ───────────────────── */
+  .flow { position: relative; height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .flow .pipe {
+    width: 2px; height: 26px; border-radius: 2px; position: relative; overflow: visible;
+    background: linear-gradient(180deg, rgba(76,201,240,.5), rgba(245,184,76,.5));
+  }
+  .flow .arrow {
+    width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent;
+    border-top: 8px solid var(--amber); filter: drop-shadow(0 0 6px var(--amber-glow));
+    margin-top: 2px;
+  }
+  .flow .label {
+    position: absolute; right: calc(50% + 20px); top: 50%; transform: translateY(-50%);
+    font-size: 10.5px; color: var(--txt-dim); letter-spacing: 1.5px; white-space: nowrap;
+    background: rgba(7,11,22,.85); padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line);
+  }
+  .flow .label.b { right: auto; left: calc(50% + 20px); color: #9fd8ec; border-color: rgba(76,201,240,.3); }
+
+  /* ── 横切关注带 ───────────────────── */
+  .crosscut {
+    margin-top: 40px;
+    background: linear-gradient(100deg, rgba(167,139,250,.08), rgba(76,201,240,.06));
+    border: 1px dashed rgba(167,139,250,.35);
+    border-radius: 18px; padding: 18px 22px;
+  }
+  .crosscut .cc-title {
+    font-size: 12px; letter-spacing: 3px; color: var(--violet); font-weight: 700;
+    margin-bottom: 14px; text-transform: uppercase;
+  }
+  .cc-items { display: flex; flex-wrap: wrap; gap: 12px; }
+  .cc-item {
+    flex: 1 1 200px; display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 11px;
+    padding: 11px 14px; font-size: 12.5px; color: var(--txt);
+  }
+  .cc-item .ic { font-size: 17px; }
+  .cc-item .d { font-size: 10.5px; color: var(--txt-dim); margin-top: 2px; }
+
+  /* ── 图例 ─────────────────────────── */
+  .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 26px; margin-top: 40px; }
+  .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--txt-dim); }
+  .lg .dot { width: 10px; height: 10px; border-radius: 3px; }
+  .lg .line-sm { width: 26px; height: 2px; border-radius: 2px; }
+  .lg b { color: var(--txt); font-weight: 600; }
+
+  .foot { text-align: center; margin-top: 34px; font-size: 11.5px; color: #5a6580; letter-spacing: 1px; }
+
+  @media (max-width: 720px) {
+    .hero h1 { font-size: 30px; }
+    .card { flex: 1 1 100%; }
+    .flow .label { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <span class="kicker">Werewolf Agent Arena · Architecture</span>
+    <h1>🐺 狼人杀 Agent 竞技场</h1>
+    <div class="sub">多 <b>LLM Agent</b> 自动对局 · 实时观赛 · 胜率评测 —— 架构基于 6 个开源项目的深度调研提炼</div>
+  </div>
+
+  <!-- L1 展示层 -->
+  <div class="layer L1">
+    <div class="layer-head">
+      <div class="layer-num">1</div>
+      <div class="layer-title">观赛与展示层</div>
+      <span class="layer-title-en">Presentation</span>
+      <span class="layer-tag">用户可见</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="ic">👁️</span>
+        <div class="t">实时观战 UI</div>
+        <div class="d">WebSocket 推送事件流，上帝视角围观发言 / 投票 / 夜间行动</div>
+      </div>
+      <div class="card">
+        <span class="ic">🎬</span>
+        <div class="t">对局回放</div>
+        <div class="d">事件流即回放源，逐轮前进 / 后退，查看任意时刻全局状态</div>
+      </div>
+      <div class="card">
+        <span class="ic">🏆</span>
+        <div class="t">排行榜</div>
+        <div class="d">胜率 × 角色 × 模型 × 策略 四维聚合，快照持久化</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="label">订阅事件 · 统计上抛</div>
+    <div class="pipe"></div><div class="arrow"></div>
+  </div>
+
+  <!-- L2 编排层 -->
+  <div class="layer L2">
+    <div class="layer-head">
+      <div class="layer-num">2</div>
+      <div class="layer-title">对局编排层</div>
+      <span class="layer-title-en">Orchestrator</span>
+      <span class="layer-tag">asyncio 并发</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="ic">🚪</span>
+        <div class="t">房间管理 Room</div>
+        <div class="d">创建 / 关闭对局，配置角色池、模型分配、玩家名单</div>
+      </div>
+      <div class="card">
+        <span class="ic">🔄</span>
+        <div class="t">日夜流程编排</div>
+        <div class="d">夜晚（守卫→狼人→女巫→预言家）→ 白天（发言→投票→处决）循环</div>
+      </div>
+      <div class="card">
+        <span class="ic">⚡</span>
+        <div class="t">并发对局</div>
+        <div class="d">多房间并行跑批，50 局连测不串行，自动续跑</div>
+      </div>
+      <div class="card">
+        <span class="ic">🎛️</span>
+        <div class="t">节奏控制</div>
+        <div class="d">暂停 / 加速 / 单步，模拟节奏 asyncio.sleep，支持中断恢复</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="label">调度指令</div>
+    <div class="pipe"></div><div class="arrow"></div>
+    <div class="label b">行动 JSON 返回</div>
+  </div>
+
+  <!-- L3 引擎层 -->
+  <div class="layer L3">
+    <div class="layer-head">
+      <div class="layer-num">3</div>
+      <div class="layer-title">游戏引擎（纯逻辑，与 AI 解耦）</div>
+      <span class="layer-title-en">Game Engine</span>
+      <span class="layer-tag">可单测 · 可复现</span>
+    </div>
+    <div class="cards">
+      <div class="card accent-b">
+        <span class="ic">⚙️</span>
+        <div class="t">状态机</div>
+        <div class="d">阶段流转、角色技能结算、屠边胜负判定，零角色名硬编码</div>
+      </div>
+      <div class="card accent-b">
+        <span class="ic">🛡️</span>
+        <div class="t">信息隔离（双闸）</div>
+        <div class="d">写时按角色订阅投递 · 读时遮蔽 <code>[REDACTED]</code>；夜间信息仅对相关者可见</div>
+      </div>
+      <div class="card accent-b">
+        <span class="ic">📡</span>
+        <div class="t">事件流与审计</div>
+        <div class="d">每个事件带 visible_to 可见性，全量落库 channel_events 可审计</div>
+      </div>
+      <div class="card accent-b">
+        <span class="ic">🎲</span>
+        <div class="t">同 Seed 复现</div>
+        <div class="d">固定随机种子 + 决策全落库，支持回放分叉与反事实推演</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="label">角色行为调用</div>
+    <div class="pipe"></div><div class="arrow"></div>
+    <div class="label b">结构化行动（JSON）</div>
+  </div>
+
+  <!-- L4 Agent 层 -->
+  <div class="layer L4">
+    <div class="layer-head">
+      <div class="layer-num">4</div>
+      <div class="layer-title">角色 Agent 层</div>
+      <span class="layer-title-en">Role Agents</span>
+      <span class="layer-tag">提示词驱动</span>
+    </div>
+    <div class="cards">
+      <div class="card accent-c">
+        <span class="ic">🐺</span>
+        <div class="t">狼人（多狼协作）</div>
+        <div class="d">夜间群聊商议收敛，白天伪装身份（Impersonate），归票指令</div>
+        <span class="sub-badge">MsgHub 夜聊</span>
+      </div>
+      <div class="card accent-c">
+        <span class="ic">🔮</span>
+        <div class="t">神职</div>
+        <div class="d">预言家验人 · 女巫救 / 毒 · 猎人开枪，技能时机与次数管理</div>
+      </div>
+      <div class="card accent-c">
+        <span class="ic">🧑‍🌾</span>
+        <div class="t">平民</div>
+        <div class="d">信息最少但需推理站队，训练"睁眼玩家"的判别力</div>
+      </div>
+      <div class="card accent-c">
+        <span class="ic">🧠</span>
+        <div class="t">记忆与反思</div>
+        <div class="d">历史截断 / 摘要防 token 膨胀；每轮 Reflect 生成逐玩家分析</div>
+      </div>
+      <div class="card accent-c">
+        <span class="ic">📋</span>
+        <div class="t">策略模板</div>
+        <div class="d">角色 prompt 槽位化，6 种策略数据驱动，新角色只写描述</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="label">决策调用</div>
+    <div class="pipe"></div><div class="arrow"></div>
+    <div class="label b">模型响应</div>
+  </div>
+
+  <!-- L5 LLM 后端层 -->
+  <div class="layer L5">
+    <div class="layer-head">
+      <div class="layer-num">5</div>
+      <div class="layer-title">LLM 后端层</div>
+      <span class="layer-title-en">Model Backend</span>
+      <span class="layer-tag">可插拔</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="ic">🔌</span>
+        <div class="t">统一 query() 接口</div>
+        <div class="d">环境只认 Message，模型可插拔；OpenAI 兼容协议</div>
+      </div>
+      <div class="card">
+        <span class="ic">🗂️</span>
+        <div class="t">Provider 池</div>
+        <div class="d">DeepSeek · OpenAI · 通义 · 本地模型，按玩家独立分配实例</div>
+      </div>
+      <div class="card">
+        <span class="ic">🧩</span>
+        <div class="t">四级 JSON 解析链</div>
+        <div class="d">strict → json_repair → 修复 prompt → 规则兜底，防静默失败</div>
+      </div>
+      <div class="card">
+        <span class="ic">🔄</span>
+        <div class="t">重试与校验</div>
+        <div class="d">超时重试、非法目标回退随机、输出 schema 校验防注入</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="label">事件落库</div>
+    <div class="pipe"></div><div class="arrow"></div>
+  </div>
+
+  <!-- L6 数据层 -->
+  <div class="layer L6">
+    <div class="layer-head">
+      <div class="layer-num">6</div>
+      <div class="layer-title">数据层</div>
+      <span class="layer-title-en">Data & Analytics</span>
+      <span class="layer-tag">SQLite 起步</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="ic">🗄️</span>
+        <div class="t">对局日志</div>
+        <div class="d">全量事件 + ground truth + 胜负，支撑回放与统计</div>
+      </div>
+      <div class="card">
+        <span class="ic">📊</span>
+        <div class="t">统计引擎</div>
+        <div class="d">胜率 × 角色 × 模型交叉分析，女巫救 / 毒细分，画图输出</div>
+      </div>
+      <div class="card">
+        <span class="ic">🧪</span>
+        <div class="t">复盘数据</div>
+        <div class="d">反事实分叉结果、失误案例 → 根因 → 建议闭环</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 横切关注 -->
+  <div class="crosscut">
+    <div class="cc-title">✦ 横切关注 Cross-Cutting Concerns</div>
+    <div class="cc-items">
+      <div class="cc-item"><span class="ic">🔒</span><div>防 Prompt 注入<div class="d">结构化输出 + 双通道协议（思考仅自己可见）</div></div></div>
+      <div class="cc-item"><span class="ic">🧭</span><div>七层 Trace<div class="d">观测 → 记忆 → prompt → 调用 → 决策 → 排行榜 全链路下钻</div></div></div>
+      <div class="cc-item"><span class="ic">📐</span><div>配置驱动<div class="d">角色池 / 模型 / 策略 YAML 声明，代码零角色名硬编码</div></div></div>
+      <div class="cc-item"><span class="ic">🧪</span><div>引擎单测<div class="d">纯逻辑无 LLM 依赖，789 测试函数级别的质量门禁</div></div></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="lg"><span class="line-sm" style="background:linear-gradient(90deg,#4cc9f0,#f5b84c)"></span><b>控制流</b> 调度与返回</span>
+    <span class="lg"><span class="line-sm" style="background:linear-gradient(90deg,#f472b6,#fb7185)"></span><b>数据流</b> 事件与统计</span>
+    <span class="lg"><span class="dot" style="background:#4cc9f0"></span>核心引擎</span>
+    <span class="lg"><span class="dot" style="background:#a78bfa"></span>Agent 角色</span>
+    <span class="lg"><span class="dot" style="background:#5eead4"></span>模型接入</span>
+  </div>
+
+  <div class="foot">Werewolf Agent Arena · 架构 v0.1 · 依据 6 个开源项目源码调研设计 · 2025-08</div>
+</div>
+</body>
+</html>

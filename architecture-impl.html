@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狼人杀 Agent 竞技场 · 实现架构图</title>
+<style>
+  :root {
+    --bg0:#070b16; --bg1:#0c1224;
+    --panel: rgba(20,28,50,.75); --line: rgba(120,150,220,.14);
+    --txt:#e8ecf8; --dim:#8b96b5;
+    --amber:#f5b84c; --cyan:#4cc9f0; --violet:#a78bfa; --green:#5eead4; --pink:#f472b6; --red:#f87171;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(76,201,240,.10), transparent 60%),
+      radial-gradient(1000px 500px at 85% 0%, rgba(167,139,250,.10), transparent 55%),
+      var(--bg0);
+    color:var(--txt); min-height:100vh; padding:36px 24px 70px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+
+  .hero{text-align:center;margin-bottom:40px}
+  .hero .kicker{display:inline-block;font-size:12px;letter-spacing:3px;color:var(--cyan);border:1px solid rgba(76,201,240,.35);border-radius:999px;padding:6px 16px;background:rgba(76,201,240,.07);margin-bottom:16px;text-transform:uppercase}
+  .hero h1{font-size:40px;font-weight:800;letter-spacing:1px;
+    background:linear-gradient(92deg,#f5b84c 0%,#f8e3b0 28%,#4cc9f0 62%,#a78bfa 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero .sub{margin-top:12px;color:var(--dim);font-size:14.5px}
+  .hero .sub b{color:var(--txt)}
+
+  .section{margin-top:44px}
+  .sec-title{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+  .sec-title .no{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:700;color:#0b1020;flex-shrink:0}
+  .sec-title h2{font-size:18px;font-weight:700;letter-spacing:1px}
+  .sec-title .en{font-size:11px;color:var(--dim);letter-spacing:2px;text-transform:uppercase}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;backdrop-filter:blur(6px);box-shadow:0 10px 40px rgba(0,0,0,.35)}
+
+  /* 技术栈 chips */
+  .stack{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+  .chip{display:flex;align-items:center;gap:8px;padding:9px 16px;border-radius:11px;border:1px solid var(--line);background:linear-gradient(160deg,rgba(255,255,255,.06),rgba(255,255,255,.015));font-size:13px}
+  .chip .ic{font-size:16px}
+  .chip .v{font-size:10.5px;color:var(--dim);margin-left:2px}
+  .chip.c-amber{border-color:rgba(245,184,76,.4)}
+  .chip.c-cyan{border-color:rgba(76,201,240,.4)}
+  .chip.c-violet{border-color:rgba(167,139,250,.4)}
+  .chip.c-green{border-color:rgba(94,234,212,.4)}
+
+  /* 目录树 + 依赖图两栏 */
+  .two-col{display:grid;grid-template-columns:minmax(0,46%) minmax(0,54%);gap:20px}
+  @media(max-width:900px){.two-col{grid-template-columns:1fr}}
+
+  .tree{font-family:"Cascadia Code","Consolas",monospace;font-size:12.5px;line-height:1.85;overflow-x:auto;white-space:nowrap}
+  .tree .dir{color:var(--cyan);font-weight:700}
+  .tree .cmt{color:#55607f;font-style:italic}
+  .tree .f{color:var(--txt)}
+  .tree .hl{background:rgba(245,184,76,.12);border-radius:4px;padding:0 4px;color:var(--amber)}
+  .tree .py{color:#9fd8ec}
+
+  /* 依赖图 */
+  .dep-wrap{position:relative;height:470px}
+  .dep-node{position:absolute;transform:translate(-50%,-50%);padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.015));text-align:center;font-size:12px;font-weight:600;z-index:2;min-width:118px}
+  .dep-node .ic{font-size:17px;display:block;margin-bottom:4px}
+  .dep-node .s{display:block;font-size:9.5px;color:var(--dim);font-weight:400;margin-top:2px}
+  .dep-node.core{background:linear-gradient(135deg,rgba(76,201,240,.25),rgba(76,201,240,.06));border-color:rgba(76,201,240,.55);box-shadow:0 0 26px rgba(76,201,240,.18)}
+  .dep-node.agent{background:linear-gradient(135deg,rgba(167,139,250,.22),rgba(167,139,250,.05));border-color:rgba(167,139,250,.5)}
+  .dep-node.side{background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.015))}
+  .dep-node.amber{background:linear-gradient(135deg,rgba(245,184,76,.2),rgba(245,184,76,.04));border-color:rgba(245,184,76,.5)}
+  .dep-svg{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+  .dep-svg line{stroke:rgba(120,150,220,.35);stroke-width:1.4;stroke-dasharray:none}
+  .dep-svg line.amber{stroke:rgba(245,184,76,.4)}
+  .dep-svg line.violet{stroke:rgba(167,139,250,.45)}
+  .dep-svg line.green{stroke:rgba(94,234,212,.4)}
+  .dep-legend{position:absolute;bottom:0;left:50%;transform:translateX(-50%);display:flex;gap:18px;font-size:10.5px;color:var(--dim);z-index:3;background:rgba(7,11,22,.8);padding:6px 14px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+
+  /* 时序图 */
+  .lane-head{display:grid;grid-template-columns:110px repeat(7,1fr);gap:6px;margin-bottom:8px}
+  .lane-head .lh{text-align:center;font-size:11px;font-weight:600;padding:8px 4px;border-radius:8px;letter-spacing:.5px}
+  .lane-body{position:relative}
+  .lane-body .gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(120,150,220,.10)}
+  .msg{display:grid;grid-template-columns:110px repeat(7,1fr);gap:6px;align-items:center;min-height:52px;position:relative;z-index:2}
+  .msg .num{font-size:10.5px;color:var(--dim);text-align:right;padding-right:8px;font-family:monospace}
+  .msg .arrow-line{grid-column:span 7;position:relative;height:100%;min-height:52px}
+  .msg .bar{position:absolute;top:50%;transform:translateY(-50%);height:2px;border-radius:2px}
+  .msg .arrowhead{position:absolute;top:50%;transform:translateY(-50%);width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:7px solid #000}
+  .msg .lbl{position:absolute;top:50%;transform:translateY(-50%);font-size:11px;white-space:nowrap;padding:2px 8px;border-radius:6px;background:rgba(7,11,22,.9);border:1px solid var(--line);color:var(--txt)}
+  .msg .lbl b{font-weight:700}
+  .msg .lbl .ret{color:var(--dim);font-size:10px;display:block}
+  .flow-amber{background:linear-gradient(90deg,rgba(245,184,76,.9),rgba(245,184,76,.5))}
+  .flow-cyan{background:linear-gradient(90deg,rgba(76,201,240,.9),rgba(76,201,240,.5))}
+  .flow-violet{background:linear-gradient(90deg,rgba(167,139,250,.9),rgba(167,139,250,.5))}
+  .flow-green{background:linear-gradient(90deg,rgba(94,234,212,.9),rgba(94,234,212,.5))}
+  .flow-pink{background:linear-gradient(90deg,rgba(244,114,182,.9),rgba(244,114,182,.5))}
+  .ah-amber{border-left-color:var(--amber)} .ah-cyan{border-left-color:var(--cyan)} .ah-violet{border-left-color:var(--violet)}
+  .ah-green{border-left-color:var(--green)} .ah-pink{border-left-color:var(--pink)}
+  .phase-band{margin-top:6px;display:flex;gap:6px}
+  .phase-band .ph{flex:1;text-align:center;font-size:10.5px;color:var(--dim);padding:6px;border-radius:8px;border:1px dashed var(--line);background:rgba(255,255,255,.02)}
+  .phase-band .ph b{display:block;font-size:10px;color:var(--txt);letter-spacing:1px;margin-bottom:2px}
+
+  /* 数据表 */
+  .tables{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:900px){.tables{grid-template-columns:1fr}}
+  .table-card{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:rgba(255,255,255,.02)}
+  .table-card .tc-head{padding:11px 14px;font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+  .table-card .tc-head .t-en{font-size:10px;color:var(--dim);font-weight:400;letter-spacing:1px}
+  .table-card table{width:100%;border-collapse:collapse;font-size:11.5px}
+  .table-card td{padding:7px 12px;border-bottom:1px solid rgba(120,150,220,.07);color:var(--dim)}
+  .table-card td:first-child{color:var(--txt);font-family:"Cascadia Code",Consolas,monospace;font-size:11px;white-space:nowrap}
+  .table-card tr:last-child td{border-bottom:none}
+  .table-card .pk{color:var(--amber)!important}
+  .table-card .fk{color:var(--cyan)!important}
+
+  .foot{text-align:center;margin-top:40px;font-size:11.5px;color:#5a6580;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <span class="kicker">Implementation Architecture</span>
+    <h1>🐺 实现架构图（落地版）</h1>
+    <div class="sub">从调研结论到代码：<b>自研 asyncio 编排 + OpenAI 兼容客户端</b>，不绑重框架 · 引擎与 AI 解耦 · 可单测可复现</div>
+  </div>
+
+  <!-- 1 技术栈 -->
+  <div class="section">
+    <div class="sec-title"><div class="no" style="background:linear-gradient(135deg,#5eead4,#2dd4bf)">1</div><h2>技术栈</h2><span class="en">Tech Stack</span></div>
+    <div class="panel"><div class="stack">
+      <span class="chip c-green"><span class="ic">🐍</span>Python 3.11<span class="v">asyncio</span></span>
+      <span class="chip c-cyan"><span class="ic">⚡</span>FastAPI<span class="v">REST + WebSocket</span></span>
+      <span class="chip c-cyan"><span class="ic">🗄️</span>SQLite<span class="v">aiosqlite 起步</span></span>
+      <span class="chip c-amber"><span class="ic">🔌</span>OpenAI 兼容协议<span class="v">httpx 直连</span></span>
+      <span class="chip c-violet"><span class="ic">🧩</span>Pydantic<span class="v">结构化输出</span></span>
+      <span class="chip c-green"><span class="ic">🧪</span>pytest<span class="v">引擎零 LLM 依赖</span></span>
+      <span class="chip"><span class="ic">📄</span>YAML 配置<span class="v">角色池/模型/策略</span></span>
+    </div></div>
+  </div>
+
+  <!-- 2 目录 + 依赖 -->
+  <div class="section">
+    <div class="sec-title"><div class="no" style="background:linear-gradient(135deg,#4cc9f0,#38bdf8)">2</div><h2>模块划分</h2><span class="en">Modules & Dependency</span></div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="tree">
+<span class="dir">werewolf-arena/</span>
+├── <span class="py">run.py</span>                  <span class="cmt"># CLI：单局 / 跑批 / 观赛三种模式</span>
+├── <span class="py">config/game.yaml</span>          <span class="cmt"># 角色池 · 模型分配 · 策略（配置驱动）</span>
+├── <span class="dir">src/werewolf_arena/</span>
+│   ├── <span class="py">models.py</span>               <span class="cmt"># Role/Phase/GameEvent/GameState</span>
+│   ├── <span class="dir">engine/</span>                <span class="cmt">┌─ 纯逻辑，不碰 AI ─┐</span>
+│   │   ├── <span class="py">game_engine.py</span>       <span class="cmt"># 状态机 · 阶段流转 · 胜负判定</span>
+│   │   ├── <span class="py">rules.py</span>             <span class="cmt"># 夜间结算 · 投票 · 屠边</span>
+│   │   └── <span class="py">visibility.py</span>        <span class="cmt"># 信息隔离双闸（写路由/读遮蔽）</span>
+│   ├── <span class="dir">orchestrator/</span>
+│   │   ├── <span class="py">room.py</span>              <span class="cmt"># 单局编排 · 广播 · 暂停/回放</span>
+│   │   └── <span class="py">arena.py</span>             <span class="cmt"># 多局并发跑批 · 种子 · 续跑</span>
+│   ├── <span class="dir">agents/</span>                <span class="cmt">┌─ 角色行为 ─┐</span>
+│   │   ├── <span class="py">base.py</span>             <span class="cmt"># PlayerAgent：observe/act/记忆</span>
+│   │   ├── <span class="py">wolf.py</span>             <span class="cmt"># 多狼夜聊协商（MsgHub 式）</span>
+│   │   ├── <span class="py">seer.py witch.py hunter.py villager.py</span>
+│   │   └── <span class="py">memory.py</span>           <span class="cmt"># 历史截断/摘要</span>
+│   ├── <span class="dir">prompts/templates.py</span>   <span class="cmt"># 槽位化 prompt · 6 策略 · 双通道协议</span>
+│   ├── <span class="dir">backends/</span>              <span class="cmt">┌─ LLM 接入 ─┐</span>
+│   │   ├── <span class="py">base.py</span>             <span class="cmt"># ModelBackend.query() 统一接口</span>
+│   │   ├── <span class="py">openai_compat.py</span>    <span class="cmt"># DeepSeek/OpenAI/通义/本地（base_url 切换）</span>
+│   │   ├── <span class="py">parser.py</span>           <span class="cmt"># 四级解析链：strict→repair→重prompt→兜底</span>
+│   │   └── <span class="py">retry.py</span>            <span class="cmt"># 重试/超时/非法目标回退</span>
+│   ├── <span class="dir">storage/</span>
+│   │   ├── <span class="py">db.py</span>               <span class="cmt"># 建表 · 事务</span>
+│   │   ├── <span class="py">event_store.py</span>      <span class="cmt"># 事件+ground truth 落库</span>
+│   │   └── <span class="py">stats.py</span>            <span class="cmt"># 胜率×角色×模型聚合</span>
+│   └── <span class="dir">web/</span>
+│       ├── <span class="py">api.py</span>              <span class="cmt"># REST + WS 广播</span>
+│       └── <span class="py">static/</span>            <span class="cmt"># 观战 UI（单页）</span>
+├── <span class="dir">tests/</span>
+│   └── <span class="py">test_engine.py test_rules.py test_parser.py</span>
+└── <span class="py">pyproject.toml</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="dep-wrap" id="depWrap">
+          <svg class="dep-svg" id="depSvg" viewBox="0 0 620 470" preserveAspectRatio="none"></svg>
+          <div class="dep-node core" style="left:50%;top:46%"><span class="ic">⚙️</span>GameEngine<span class="s">engine/ · 零 AI 依赖</span></div>
+          <div class="dep-node amber" style="left:50%;top:8%"><span class="ic">🎛️</span>Orchestrator<span class="s">orchestrator/room.py</span></div>
+          <div class="dep-node agent" style="left:12%;top:30%"><span class="ic">🧠</span>PlayerAgent<span class="s">agents/ · 记忆+策略</span></div>
+          <div class="dep-node" style="left:88%;top:30%"><span class="ic">📄</span>PromptBuilder<span class="s">prompts/ · 槽位模板</span></div>
+          <div class="dep-node side" style="left:16%;top:74%"><span class="ic">🔌</span>ModelBackend<span class="s">backends/ · query()</span></div>
+          <div class="dep-node side" style="left:84%;top:74%"><span class="ic">🗄️</span>EventStore<span class="s">storage/ · SQLite</span></div>
+          <div class="dep-node" style="left:50%;top:93%"><span class="ic">🌐</span>Web API<span class="s">web/ · REST+WS</span></div>
+          <div class="dep-legend">
+            <span style="color:var(--amber)">━ 控制流（调度/校验）</span>
+            <span style="color:var(--violet)">━ 数据流（状态/事件）</span>
+            <span style="color:var(--green)">━ LLM 调用</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 时序 -->
+  <div class="section">
+    <div class="sec-title"><div class="no" style="background:linear-gradient(135deg,#f5b84c,#f97316)">3</div><h2>对局回合时序（白天发言 → 投票）</h2><span class="en">Sequence</span></div>
+    <div class="panel">
+      <div class="lane-head">
+        <div class="lh" style="color:var(--dim)"></div>
+        <div class="lh" style="background:rgba(245,184,76,.14);color:var(--amber)">Orchestrator</div>
+        <div class="lh" style="background:rgba(76,201,240,.14);color:var(--cyan)">GameEngine</div>
+        <div class="lh" style="background:rgba(167,139,250,.14);color:var(--violet)">PlayerAgent</div>
+        <div class="lh" style="background:rgba(94,234,212,.14);color:var(--green)">ModelBackend</div>
+        <div class="lh" style="background:rgba(255,255,255,.07);color:var(--txt)">LLM Provider</div>
+        <div class="lh" style="background:rgba(244,114,182,.14);color:var(--pink)">EventStore</div>
+        <div class="lh" style="background:rgba(255,255,255,.07);color:var(--txt)">WebSocket</div>
+      </div>
+      <div class="lane-body" id="laneBody"></div>
+      <div class="phase-band">
+        <div class="ph"><b>夜晚</b>守卫→狼人(夜聊)→女巫→预言家</div>
+        <div class="ph"><b>清晨</b>死亡公告</div>
+        <div class="ph"><b>白天发言</b>按序每人 1 轮（可 2 轮）</div>
+        <div class="ph"><b>投票</b>平票重投/无人出局</div>
+        <div class="ph"><b>处决</b>猎人开枪</div>
+        <div class="ph"><b>判胜</b>屠边/屠城</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 数据表 -->
+  <div class="section">
+    <div class="sec-title"><div class="no" style="background:linear-gradient(135deg,#94a3b8,#64748b)">4</div><h2>数据模型</h2><span class="en">SQLite Schema</span></div>
+    <div class="tables">
+      <div class="table-card">
+        <div class="tc-head">games <span class="t-en">对局</span></div>
+        <table>
+          <tr><td class="pk">id</td><td>INTEGER PK</td></tr>
+          <tr><td>config_json</td><td>角色池/模型/策略快照</td></tr>
+          <tr><td>seed</td><td>随机种子（复现用）</td></tr>
+          <tr><td>winner</td><td>wolf / village</td></tr>
+          <tr><td>rounds · started_at</td><td>时长</td></tr>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="tc-head">events <span class="t-en">事件流（回放源）</span></div>
+        <table>
+          <tr><td class="pk">id</td><td>INTEGER PK</td></tr>
+          <tr><td class="fk">game_id · seq</td><td>顺序号</td></tr>
+          <tr><td>phase · type</td><td>发言/投票/验人/刀人…</td></tr>
+          <tr><td>payload</td><td>JSON 内容</td></tr>
+          <tr><td>visible_to</td><td>可见角色集合（隔离审计）</td></tr>
+          <tr><td>ground_truth</td><td>上帝视角真相</td></tr>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="tc-head">decisions <span class="t-en">Agent 决策（复盘）</span></div>
+        <table>
+          <tr><td class="pk">id</td><td>INTEGER PK</td></tr>
+          <tr><td class="fk">game_id · player</td><td>谁 · 何时</td></tr>
+          <tr><td>prompt_hash</td><td>提示词指纹</td></tr>
+          <tr><td>raw_output</td><td>LLM 原始输出</td></tr>
+          <tr><td>action_json · parse_level</td><td>解析结果/兜底层级</td></tr>
+          <tr><td>latency_ms · tokens</td><td>成本统计</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">Werewolf Agent Arena · 实现架构 v0.1 · 引擎与 AI 解耦 · 信息隔离双闸 · 四级解析链 · 同 Seed 复现 · 2025-08</div>
+</div>
+
+<script>
+/* ── 依赖图连线 ── */
+(function(){
+  const svg = document.getElementById('depSvg');
+  const nodes = [...document.querySelectorAll('#depWrap .dep-node')];
+  const pos = n => ({ x: parseFloat(n.style.left), y: parseFloat(n.style.top) });
+  const byKey = k => nodes.find(n => n.textContent.includes(k));
+  const links = [
+    ['Orchestrator','GameEngine','amber','调度 / 校验行动'],
+    ['GameEngine','PlayerAgent','violet','状态查询 / 行动提交'],
+    ['PlayerAgent','PromptBuilder','amber','拼装提示词'],
+    ['PlayerAgent','ModelBackend','green','query(messages)'],
+    ['GameEngine','EventStore','violet','事件 + ground truth 落库'],
+    ['EventStore','Web API','amber','事件流订阅推送'],
+    ['ModelBackend','Web API','amber',''],  // 占位不会画
+  ].filter(l => l[0] && l[1] && l[2]);
+  // 手动精确定义连线（基于百分比坐标）
+  const defs = [
+    {a:['50%','8%'], b:['50%','46%'], cls:'amber'},          // Orchestrator → Engine
+    {a:['50%','46%'], b:['12%','30%'], cls:'violet'},         // Engine → Agent
+    {a:['12%','30%'], b:['88%','30%'], cls:'amber'},          // Agent → Prompt
+    {a:['12%','30%'], b:['16%','74%'], cls:'green'},          // Agent → Backend
+    {a:['50%','46%'], b:['84%','74%'], cls:'violet'},         // Engine → EventStore
+    {a:['84%','74%'], b:['50%','93%'], cls:'amber'},          // EventStore → Web
+    {a:['88%','30%'], b:['84%','74%'], cls:'amber', dash:true}, // Prompt → EventStore(审计)
+  ];
+  const NS='http://www.w3.org/2000/svg';
+  defs.forEach(d=>{
+    const x1=620*d.a[0].replace('%','')/100, y1=470*d.a[1].replace('%','')/100;
+    const x2=620*d.b[0].replace('%','')/100, y2=470*d.b[1].replace('%','')/100;
+    const line=document.createElementNS(NS,'line');
+    line.setAttribute('x1',x1); line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2); line.setAttribute('y2',y2);
+    line.setAttribute('class',d.cls);
+    if(d.dash) line.setAttribute('stroke-dasharray','4 3');
+    svg.appendChild(line);
+  });
+})();
+
+/* ── 时序图 ── */
+(function(){
+  const body = document.getElementById('laneBody');
+  // 列索引：0 Orc, 1 Engine, 2 Agent, 3 Backend, 4 LLM, 5 Store, 6 WS
+  const messages = [
+    {n:'01', from:0, to:1, cls:'amber', lbl:'next_phase()<b> 取当前行动者</b>'},
+    {n:'02', from:1, to:2, cls:'violet', lbl:'visible_state(player)<b> 按角色投影</b><span class="ret">隔离双闸：无关信息 [REDACTED]</span>'},
+    {n:'03', from:2, to:2, cls:'amber', lbl:'<b>组装 prompt</b>（角色模板+记忆摘要+策略）'},
+    {n:'04', from:2, to:3, cls:'green', lbl:'query(messages)<b> 统一接口</b>'},
+    {n:'05', from:3, to:4, cls:'green', lbl:'HTTP 调用<b>（重试/超时）</b>'},
+    {n:'06', from:4, to:3, cls:'green', lbl:'<b>响应文本</b>'},
+    {n:'07', from:3, to:2, cls:'green', lbl:'<b>四级解析</b> strict→repair→重prompt→兜底<span class="ret">非法目标回退随机</span>'},
+    {n:'08', from:2, to:1, cls:'violet', lbl:'act(action_json)<b> 提交行动</b>'},
+    {n:'09', from:1, to:1, cls:'amber', lbl:'<b>校验 → 结算</b> 生成 GameEvent(visible_to)'},
+    {n:'10', from:1, to:5, cls:'violet', lbl:'<b>落库</b> events + decisions + ground_truth'},
+    {n:'11', from:5, to:6, cls:'amber', lbl:'<b>WS 广播</b> 观战端实时刷新'},
+    {n:'12', from:1, to:0, cls:'amber', lbl:'返回<br><b>进入下一阶段</b> 或 判胜（写 stats）'},
+  ];
+  const COLW = 100/7;
+  const colX = i => 10 + i*COLW + COLW/2; // 百分比位置（lane 列中心）
+  messages.forEach(m=>{
+    const row=document.createElement('div'); row.className='msg';
+    const num=document.createElement('div'); num.className='num'; num.textContent=m.n;
+    const al=document.createElement('div'); al.className='arrow-line';
+    const start=m.from===m.to?colX(m.from)-3:colX(m.from);
+    const end=m.to===m.from?colX(m.to)+3:colX(m.to);
+    const bar=document.createElement('div'); bar.className='bar '+m.cls;
+    bar.style.left=start+'%'; bar.style.width=(end-start)+'%';
+    const ah=document.createElement('div'); ah.className='arrowhead ah-'+m.cls.split('-')[1];
+    ah.style.left=end+'%';
+    const lbl=document.createElement('div'); lbl.className='lbl'; lbl.innerHTML=m.lbl;
+    // 标签放在线段中间上方
+    lbl.style.left=Math.min(start,end)+'%';
+    lbl.style.marginLeft='8px'; lbl.style.top='32%';
+    if(m.to===6){ lbl.style.transform='translateY(-50%)'; }
+    al.appendChild(bar); al.appendChild(ah); al.appendChild(lbl);
+    row.appendChild(num); row.appendChild(al);
+    body.appendChild(row);
+  });
+  // 垂直生命线
+  [0,1,2,3,4,5,6].forEach(i=>{
+    const g=document.createElement('div'); g.className='gl';
+    g.style.left=colX(i)+'%';
+    body.appendChild(g);
+  });
+})();
+</script>
+</body>
+</html>
