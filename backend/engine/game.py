@@ -39,7 +39,7 @@ class GameEngine:
         GamePhase.NIGHT:         {GamePhase.NIGHT_RESOLVE},
         GamePhase.NIGHT_RESOLVE: {GamePhase.SHOOT, GamePhase.DAY_DISCUSS, GamePhase.GAMEOVER},
         GamePhase.SHOOT:         {GamePhase.DAY_DISCUSS, GamePhase.NIGHT, GamePhase.GAMEOVER},
-        GamePhase.DAY_DISCUSS:   {GamePhase.DAY_VOTE, GamePhase.GAMEOVER},
+        GamePhase.DAY_DISCUSS:   {GamePhase.DAY_VOTE, GamePhase.NIGHT, GamePhase.GAMEOVER},
         GamePhase.DAY_VOTE:      {GamePhase.DAY_RESOLVE},
         GamePhase.DAY_RESOLVE:   {GamePhase.SHOOT, GamePhase.NIGHT, GamePhase.GAMEOVER},
         GamePhase.GAMEOVER:      set(),
@@ -183,6 +183,7 @@ class GameEngine:
 
     def process_seer_check(self, seer_id: str, target_id: str) -> GameEvent:
         t = self.players.get(target_id)
+        # 用 team 判定：狼王/白狼王也是狼
         is_wolf = Role(self.state.roles[target_id]).team == Team.WEREWOLF
         self.state.night_actions["seer"] = target_id
         return self.emit(
@@ -363,7 +364,7 @@ class GameEngine:
         )
 
     def process_self_explode(self, player_id: str, target_id: str = None) -> list:
-        """狼王/白狼王白天自爆带人（讨论阶段）"""
+        """狼王/白狼王白天自爆带人：自爆后直接入夜（跳过发言/投票）"""
         events = []
         role = Role(self.state.roles[player_id])
         if role not in (Role.ALPHA_WOLF, Role.WHITE_WOLF_KING):
@@ -381,9 +382,14 @@ class GameEngine:
                 EventType.ALPHA_SHOOT, player_id=player_id,
                 content=f"自爆带走了 {t.name if t else target_id}",
             ))
+        # 先清空开枪队列（自爆带猎人时猎人可开枪），再判胜
         winner = self.check_winner()
         if winner:
             events += self.end_game(winner)
+        elif self.state.phase == GamePhase.DAY_DISCUSS:
+            # 自爆后直接进入夜晚
+            self.state.night_actions.clear()
+            self._transition(GamePhase.NIGHT)
         return events
 
     def process_knight_duel(self, knight_id: str, target_id: str) -> list:
@@ -410,6 +416,15 @@ class GameEngine:
         )
 
     def process_vote(self, voter_id: str, target_id: str) -> GameEvent:
+        # 白痴翻牌后失去投票权
+        if voter_id == self.state.pending_idiot:
+            p = self.players.get(voter_id)
+            return self.emit(
+                EventType.VOTE_CAST,
+                player_id=voter_id, player_name=p.name if p else "",
+                content=f"{p.name if p else voter_id}（白痴翻牌）无投票权，自动弃票",
+                metadata={"abstain": True, "no_vote_right": True},
+            )
         self.state.vote_results[voter_id] = target_id
         p = self.players.get(voter_id)
         t = self.players.get(target_id)
@@ -552,7 +567,8 @@ class GameEngine:
             if self.state.lovers and player_id in self.state.lovers:
                 for pid in self.state.lovers:
                     roles_visible[pid] = self.state.roles.get(pid)
-        return {
+        my_role = self.state.roles.get(player_id)
+        visible = {
             "phase": self.state.phase.value,
             "day_count": self.state.day_count,
             "alive_players": [self.players[pid].to_public_dict() for pid in self.state.alive_players],
@@ -562,11 +578,14 @@ class GameEngine:
             "roles_visible": roles_visible,
             "lovers": self.state.lovers if (player_id in self.state.lovers
                                             or self.state.roles.get(player_id) == Role.CUPID) else [],
-            "witch_antidote": self.state.witch_antidote,
-            "witch_poison": self.state.witch_poison,
             "winner": self.state.winner.value if self.state.winner else None,
             "winner_reason": self.state.winner_reason,
         }
+        # 女巫药水仅本人可见（key 都不存在 = 零泄露）
+        if my_role == Role.WITCH:
+            visible["witch_antidote"] = self.state.witch_antidote
+            visible["witch_poison"] = self.state.witch_poison
+        return visible
 
     def get_speaker_order(self) -> list[str]:
         alive = list(self.state.alive_players)

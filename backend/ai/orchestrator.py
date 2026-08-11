@@ -250,9 +250,10 @@ class Room:
             witches = self.engine.alive_role(Role.WITCH)
             if witches:
                 resp = await self._act(witches[0], "decide_night_action")
-                self.engine.process_witch_action(
+                witch_events = self.engine.process_witch_action(
                     witches[0], save=resp.save, poison_target=resp.poison_target)
-                for e in self.engine.state.events[-2:]:
+                # 只广播女巫实际产生的行动事件（不广播狼刀等私密事件）
+                for e in witch_events:
                     await self._emit_engine_events([e])
                 await self._broadcast_ai(witches[0], resp, "女巫行动")
                 # 记忆：女巫药水使用
@@ -274,8 +275,9 @@ class Room:
                     self.engine.process_seer_check(seers[0], resp.action)
                     await self._emit_engine_events([self.engine.state.events[-1]])
                     await self._broadcast_ai(seers[0], resp, "预言家查验")
-                    # 记忆：预言家查验结果（私密）
-                    is_wolf = self.engine.state.roles.get(resp.action) == Role.WEREWOLF
+                    # 记忆：预言家查验结果（私密）——用 team 判定，狼王/白狼王也是狼
+                    is_wolf = (Role(self.engine.state.roles[resp.action]).team
+                               == Team.WEREWOLF)
                     t = self.engine.get_player(resp.action)
                     self.memory.get(seers[0]).record_private(
                         state.day_count,
@@ -486,21 +488,29 @@ class Room:
         await self._run_vote()
 
     async def _run_explode_window(self):
-        """狼王/白狼王可自爆（简化：由第一只存活狼王/白狼王决策）"""
+        """狼王/白狼王可自爆：自爆后直接入夜（跳过决斗/投票）"""
         state = self.engine.state
         for pid in list(state.alive_players):
             role = Role(state.roles.get(pid))
             if role in (Role.ALPHA_WOLF, Role.WHITE_WOLF_KING) and pid in self.adapters:
                 resp = await self._act(pid, "decide_explode")
-                if resp.action == "__explode__":
+                if resp.action == "__explode__" or resp.action == "__explode_and_take__":
                     events = self.engine.process_self_explode(pid, resp.poison_target)
                     await self._emit_engine_events(events)
                     await self._broadcast_ai(pid, resp, "自爆")
-                    return
-                elif resp.action == "__explode_and_take__":
-                    events = self.engine.process_self_explode(pid, resp.poison_target)
-                    await self._emit_engine_events(events)
-                    await self._broadcast_ai(pid, resp, "自爆带人")
+                    if self.status == "finished":
+                        return
+                    # 自爆带走猎人 → 处理开枪队列
+                    await self._handle_shoot_window()
+                    if self.status == "finished":
+                        return
+                    # 直接进入夜晚
+                    await self.broadcast("phase_change", {
+                        "phase": "night",
+                        "day_count": self.engine.state.day_count,
+                        "content": f"{self.engine.get_player(pid).name} 自爆，直接进入夜晚！",
+                    })
+                    await self._run_night()
                     return
 
     async def _run_knight_window(self):

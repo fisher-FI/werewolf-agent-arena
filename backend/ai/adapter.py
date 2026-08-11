@@ -520,10 +520,7 @@ class AIAdapter:
         if not target or target == "null":
             logger.info(f"[目标解析] 目标为空(null/None)，exclude={exclude_id}，force_pick={force_pick}")
             if force_pick:
-                alive = [p for p in engine.state.alive_players if p != exclude_id]
-                pick = random.choice(alive) if alive else ""
-                logger.info(f"[目标解析] 必须行动，随机兜底 → {pick}")
-                return pick
+                return self._random_alive_target(engine, exclude_id)
             return ""
         if isinstance(target, list):
             target = target[0] if target else None
@@ -541,9 +538,30 @@ class AIAdapter:
         except (ValueError, TypeError):
             logger.warning(f"[目标解析] 无法转int: {target!r}，走随机兜底")
         alive = [p for p in engine.state.alive_players if p != exclude_id]
-        pick = alive[0] if alive else ""
+        alive = self._filter_by_role(engine, alive, exclude_id)
+        if force_pick:
+            pick = random.choice(alive) if alive else ""
+            logger.info(f"[目标解析] 必须行动，随机兜底 → {pick}")
+            return pick
+        # 非必须行动：无效目标 = 弃权，不伪造
+        logger.info(f"[目标解析] 无效目标且非必须行动 → 弃权")
+        return ""
+
+    def _random_alive_target(self, engine: GameEngine, exclude_id: str) -> str:
+        """随机选存活目标：狼人排除队友，其他人排除自己"""
+        alive = [p for p in engine.state.alive_players if p != exclude_id]
+        alive = self._filter_by_role(engine, alive, exclude_id)
+        pick = random.choice(alive) if alive else ""
         logger.info(f"[目标解析] 随机兜底 → {pick}")
         return pick
+
+    def _filter_by_role(self, engine: GameEngine, candidates: list, actor_id: str) -> list:
+        """按角色过滤候选：狼人不能选狼队友"""
+        actor_role = engine.state.roles.get(actor_id)
+        if actor_role and Role(actor_role).team == Team.WEREWOLF:
+            return [p for p in candidates
+                    if Role(engine.state.roles.get(p)).team != Team.WEREWOLF]
+        return candidates
 
     # ─── 行动入口 ───
 

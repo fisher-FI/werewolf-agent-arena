@@ -1,0 +1,20 @@
+.............................................F.F.......                  [100%]
+================================== FAILURES ===================================
+_________________________ test_explode_ends_day_phase _________________________
+tests\test_regression.py:79: in test_explode_ends_day_phase
+    events = eng.process_self_explode(alpha)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+engine\game.py:392: in process_self_explode
+    self._transition(GamePhase.NIGHT)
+engine\game.py:60: in _transition
+    raise IllegalTransitionError(
+E   engine.game.IllegalTransitionError: 非法转移: day_discuss → night
+________________________ test_witch_potions_not_leaked ________________________
+tests\test_regression.py:114: in test_witch_potions_not_leaked
+    assert "witch_antidote" not in vs_villager, "平民不应看到女巫药水"
+E   AssertionError: 平民不应看到女巫药水
+E   assert 'witch_antidote' not in {'alive_players': [{'id': 'p1', 'is_alive': True, 'name': '玩家1', 'player_type': 'ai', ...}, {'id': 'p2', 'is_alive': T......}, {'id': 'p6', 'is_alive': True, 'name': '玩家6', 'player_type': 'ai', ...}, ...], 'day_count': 1, 'lovers': [], ...}
+=========================== short test summary info ===========================
+FAILED tests/test_regression.py::test_explode_ends_day_phase - engine.game.Il...
+FAILED tests/test_regression.py::test_witch_potions_not_leaked - AssertionErr...
+2 failed, 53 passed in 9.66s
