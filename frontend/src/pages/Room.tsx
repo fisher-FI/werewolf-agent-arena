@@ -297,11 +297,19 @@ export default function Room() {
           </>
         )}
         {type === 'vote_cast' && (
-          <div className="evt-vote">
-            <span className="evt-player">{evt.player_name}</span>
-            <span className="vote-arrow">🗳️ →</span>
-            <span className="evt-player">{evt.target_name}</span>
-          </div>
+          evt.metadata?.abstain ? (
+            <div className="evt-vote evt-abstain">
+              <span className="evt-player">{evt.player_name}</span>
+              <span className="vote-arrow">🤷 →</span>
+              <span className="evt-target">弃票</span>
+            </div>
+          ) : (
+            <div className="evt-vote">
+              <span className="evt-player">{evt.player_name}</span>
+              <span className="vote-arrow">🗳️ →</span>
+              <span className="evt-player">{evt.target_name}</span>
+            </div>
+          )
         )}
         {type === 'vote_result' && <div className="evt-vote-result">📊 {evt.content}</div>}
         {type === 'player_death' && <div className="evt-death">💀 {evt.content}</div>}

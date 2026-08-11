@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 import random
+import logging
 from collections import Counter
 from typing import Optional
+
+logger = logging.getLogger("werewolf.engine")
 
 from .models import (
     Player, Role, Team, GamePhase, EventType, GameEvent, GameState,
@@ -417,11 +420,22 @@ class GameEngine:
             content=f"{p.name if p else voter_id} 投票给 {t.name if t else target_id}",
         )
 
+    def process_abstain(self, voter_id: str) -> GameEvent:
+        """弃票（合法行为，明确记录）"""
+        p = self.players.get(voter_id)
+        return self.emit(
+            EventType.VOTE_CAST,
+            player_id=voter_id, player_name=p.name if p else "",
+            content=f"{p.name if p else voter_id} 选择弃票",
+            metadata={"abstain": True},
+        )
+
     def resolve_votes(self) -> list:
         """结算投票：票出 → 白痴翻牌 / 狼王带人 / 猎人开枪 → 判胜 → 进入夜晚"""
         self._transition(GamePhase.DAY_RESOLVE)
         events = []
         if not self.state.vote_results:
+            logger.warning(f"[结算] 无人投票！存活{len(self.state.alive_players)}人，vote_results为空")
             events.append(self.emit(EventType.SYSTEM, content="无人投票"))
             self._open_night(events)
             self.state._after_vote = False
@@ -430,6 +444,7 @@ class GameEngine:
         counts = Counter(self.state.vote_results.values())
         max_votes = max(counts.values())
         top = [pid for pid, c in counts.items() if c == max_votes]
+        logger.info(f"[结算] 投票分布: { {self.players[p].name if p in self.players else p: c for p, c in counts.items()} }，最高票 {max_votes}，平票? {len(top) > 1}")
 
         detail = []
         for target, c in counts.most_common():

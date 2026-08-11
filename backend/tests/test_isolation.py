@@ -94,3 +94,48 @@ def test_make_speech_never_falls_back_to_raw():
     resp = asyncio.run(a.make_speech(eng, "p1"))
     assert resp.content == "[本回合未发言]", f"发言应为占位符，实际: {resp.content}"
     assert "不是 JSON" not in resp.content
+
+
+# ─── JSON 修复链 ───
+
+class TestJsonRepair:
+    def test_bad_json_triggers_repair(self):
+        """第一次返回坏 JSON，回炉后返回合法 JSON"""
+        import asyncio
+        from engine.models import Player
+        from engine.game import GameEngine
+        from engine.boards import get_board
+
+        players = [Player(id=f"p{i}", name=f"玩家{i}", seat=i) for i in range(1, 13)]
+        eng = GameEngine(players, get_board("ywls"))
+        eng.assign_roles()
+
+        a = make_adapter()
+        calls = []
+
+        async def fake_call(messages, temperature=None):
+            calls.append(messages)  # 记录完整消息列表
+            if len(calls) == 1:
+                return "这不是 JSON 的文本 response"
+            return '{"speech": "修复成功", "vote_target": 3}'
+
+        a._call = fake_call
+        result = asyncio.run(a._call_json([{"role": "user", "content": "x"}]))
+        assert result["speech"] == "修复成功"
+        assert result["vote_target"] == 3
+        assert len(calls) == 2, "应回炉一次"
+        # 修复消息应包含错误提示，且消息数为 3（原2条 + 修复1条）
+        repair_msgs = calls[1]
+        assert len(repair_msgs) == 3
+        assert "不是合法的 JSON" in repair_msgs[2]["content"]
+
+    def test_always_bad_json_returns_empty(self):
+        """一直坏 JSON，超限后返回空 dict（不抛异常）"""
+        import asyncio
+        a = make_adapter()
+        async def fake_call(messages, temperature=None):
+            return "还是坏 JSON"
+
+        a._call = fake_call
+        result = asyncio.run(a._call_json([{"role": "user", "content": "x"}]))
+        assert result == {}

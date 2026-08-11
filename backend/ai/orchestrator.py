@@ -480,6 +480,13 @@ class Room:
                     self.engine.process_vote(pid, resp.action)
                     await self.broadcast("game_event", self.engine.state.events[-1].to_dict())
                     await self._broadcast_ai(pid, resp, "投票")
+                    logger.info(f"[投票阶段] {player.name} 投给 {self.engine.get_player(resp.action).name if resp.action in self.engine.players else resp.action}")
+                else:
+                    # 弃票是合法行为：明确记录并广播
+                    event = self.engine.process_abstain(pid)
+                    await self.broadcast("game_event", event.to_dict())
+                    await self._broadcast_ai(pid, resp, "弃票")
+                    logger.info(f"[投票阶段] {player.name} 弃票")
             elif player.player_type == "human":
                 await self.broadcast("wait_human_vote", {
                     "player_id": pid, "player_name": player.name,
@@ -490,6 +497,7 @@ class Room:
         await self.broadcast("current_speaker", {"player_id": None, "action": "done"})
 
         await self._check_pause()
+        logger.info(f"[投票阶段] 投票收集完毕: {len(self.engine.state.vote_results)}/{len(self.engine.state.alive_players)} 人投票")
         events = self.engine.resolve_votes()
         if await self._emit_engine_events(events):
             return

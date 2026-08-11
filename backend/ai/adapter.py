@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import random
 import logging
 from typing import Optional
 from dataclasses import dataclass, field
@@ -414,28 +415,73 @@ class AIAdapter:
         json_match = re.search(r'\{[\s\S]*\}', raw)
         if json_match:
             try:
-                return json.loads(json_match.group())
+                parsed = json.loads(json_match.group())
+                return parsed
             except json.JSONDecodeError:
-                pass
-        return {"speech": "", "reasoning": "", "confidence": 0.3}
+                logger.warning(f"JSON 解析失败，raw前200字: {raw[:200]}")
+        else:
+            logger.warning(f"未找到 JSON，raw前200字: {raw[:200]}")
+        return None
 
-    def _resolve_seat_target(self, engine: GameEngine, target, exclude_id: str = "") -> str:
+    async def _call_json(self, messages: list[dict], temperature: float = None,
+                         max_repairs: int = 2) -> dict:
+        """调用 LLM 并确保拿到合法 JSON：解析失败则带错误信息回炉重问，最多重试 max_repairs 次"""
+        raw = await self._call(messages, temperature)
+        parsed = self._parse_response(raw)
+        if parsed is not None:
+            return parsed
+
+        for attempt in range(max_repairs):
+            logger.warning(f"[JSON修复] 第{attempt+1}次回炉：输出不是合法 JSON")
+            repair_messages = messages + [
+                {"role": "assistant", "content": raw[:2000]},
+                {"role": "user", "content": (
+                    "你的上一条输出不是合法的 JSON 格式，无法解析。"
+                    "请重新输出，只输出一个合法的 JSON 对象（不要任何额外文字、注释或代码块标记）。"
+                )},
+            ]
+            raw = await self._call(repair_messages, temperature)
+            parsed = self._parse_response(raw)
+            if parsed is not None:
+                logger.info(f"[JSON修复] 第{attempt+1}次回炉成功")
+                return parsed
+
+        logger.error(f"[JSON修复] {max_repairs}次回炉后仍失败，返回空")
+        return {}
+
+    def _resolve_seat_target(self, engine: GameEngine, target, exclude_id: str = "",
+                             force_pick: bool = False) -> str:
+        """把目标解析为 player_id
+        force_pick=True 时 null 也随机兜底（狼人刀/守卫守/预言家验必须行动）；
+        force_pick=False 时 null 表示合法弃权（女巫/开枪/投票）。
+        """
         if not target or target == "null":
+            logger.info(f"[目标解析] 目标为空(null/None)，exclude={exclude_id}，force_pick={force_pick}")
+            if force_pick:
+                alive = [p for p in engine.state.alive_players if p != exclude_id]
+                pick = random.choice(alive) if alive else ""
+                logger.info(f"[目标解析] 必须行动，随机兜底 → {pick}")
+                return pick
             return ""
         if isinstance(target, list):
             target = target[0] if target else None
         if target in engine.players:
+            logger.info(f"[目标解析] {target} 直接命中 player_id")
             return target
         try:
             seat = int(target)
             for pid in engine.state.alive_players:
                 p = engine.get_player(pid)
                 if p and p.seat == seat and pid != exclude_id:
+                    logger.info(f"[目标解析] 座位{seat} → {pid}")
                     return pid
+            logger.warning(f"[目标解析] 座位{seat} 无存活玩家，走随机兜底")
         except (ValueError, TypeError):
-            pass
+            logger.warning(f"[目标解析] 无法转int: {target!r}，走随机兜底")
         alive = [p for p in engine.state.alive_players if p != exclude_id]
-        return alive[0] if alive else ""
+        pick = alive[0] if alive else ""
+        logger.info(f"[目标解析] 随机兜底 → {pick}")
+        return pick
 
     # ─── 行动入口 ───
 
@@ -447,8 +493,8 @@ class AIAdapter:
             {"role": "user", "content": self._build_speech_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             return AIResponse(
                 content=parsed.get("speech") or "[本回合未发言]",
                 reasoning=parsed.get("reasoning", ""),
@@ -482,8 +528,8 @@ class AIAdapter:
             )},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             speech = parsed.get("speech")
             return AIResponse(
                 content=speech if speech and speech not in ("null", "None") else "",
@@ -504,9 +550,10 @@ class AIAdapter:
             {"role": "user", "content": self._build_vote_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             action = self._resolve_seat_target(engine, parsed.get("vote_target"), player_id)
+            logger.info(f"[投票] {engine.get_player(player_id).name} → vote_target={parsed.get('vote_target')!r}, 解析action={action!r}")
             return AIResponse(
                 content=parsed.get("speech", ""),
                 reasoning=parsed.get("reasoning", ""),
@@ -532,12 +579,14 @@ class AIAdapter:
             {"role": "user", "content": self._build_night_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             resp = AIResponse(
                 content=parsed.get("speech", ""),
                 reasoning=parsed.get("reasoning", ""),
-                action=self._resolve_seat_target(engine, parsed.get("vote_target"), player_id),
+                action=self._resolve_seat_target(engine, parsed.get("vote_target"), player_id,
+                                                 force_pick=role in (Role.WEREWOLF, Role.ALPHA_WOLF,
+                                                                     Role.WHITE_WOLF_KING, Role.GUARD, Role.SEER)),
                 confidence=float(parsed.get("confidence", 0.5)),
                 thinking_time=round(time.time() - start, 1),
             )
@@ -569,8 +618,8 @@ class AIAdapter:
                 f"请投出你的最终一票。严格按 JSON 格式输出，vote_target 填目标座位号。"},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             return AIResponse(
                 content=parsed.get("speech", ""),
                 reasoning=parsed.get("reasoning", ""),
@@ -591,8 +640,8 @@ class AIAdapter:
             {"role": "user", "content": self._build_shoot_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             return AIResponse(
                 content=parsed.get("speech", ""),
                 reasoning=parsed.get("reasoning", ""),
@@ -613,8 +662,8 @@ class AIAdapter:
             {"role": "user", "content": self._build_explode_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             explode = bool(parsed.get("explode", False))
             target = self._resolve_seat_target(engine, parsed.get("vote_target"), player_id)
             return AIResponse(
@@ -638,8 +687,8 @@ class AIAdapter:
             {"role": "user", "content": self._build_duel_prompt(engine, player_id)},
         ]
         try:
-            raw = await self._call(messages)
-            parsed = self._parse_response(raw)
+            parsed = await self._call_json(messages)
+            
             return AIResponse(
                 content=parsed.get("speech", ""),
                 reasoning=parsed.get("reasoning", ""),
