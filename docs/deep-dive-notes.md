@@ -78,6 +78,36 @@
 
 **架构**：单文件 `agent_cn.py`（600 行）：`GameMaster` 主循环 + `PlayerBot` 各持完整 chat_history，夜晚行动是纯随机规则代码，LLM 只管白天发言/投票；规则全塞进一个 `GAME_PROMPT` 字符串；无环境/agent 分离、无校验，投票靠字符串匹配玩家名。**可借鉴**：主持人 prompt 注入私密信息（"记住你晚上的信息是…"）与狼人"归票"指令的写法。**坑**：不可扩展、无统计、旧 SDK，仅作 prompt 参考。
 
-## 待补充
+## 7. Muqian-Sun/ai-werewolf-agent-teams（字节跳动评测+复盘平台，完整可跑）
 
-- [ ] 5. Muqian-Sun/ai-werewolf-agent-teams（字节跳动评测+复盘平台，仍在调研中）
+**架构**：插件化分层：`plugins/`（11 类 121 个插件，manifest.yaml + class_path 反射加载）→ `server/core/`（GameKernel 内核，grep 验证零角色名硬编码）→ `server/game/`（phase_runners 规则编排）→ `server/agents/`（记忆/决策/拼装）→ `server/eval/`（评测/复盘）→ `server/storage/`（31 张表）+ `server/api/` + `web/`（React 10 页面）。255 个 py 文件、789 个测试函数，工程量真实。
+
+**核心机制**：
+- 对局引擎：`kernel.py` 的 `setup_game`/`run_round`/`check_win`——phase 顺序由 manifest 的 `transition_to`+`concurrent_with` 图驱动，按 phase id 分发到 `phase_runners.py` 的 `PHASE_HANDLERS`；夜狼用 `wolf_discuss.py` 多轮商议收敛；胜负由 faction 插件 `win_spec` 声明式判定（如 `Or(AllAgentsOfRoleDead(...))`）；config.yaml 配置 3 狼+预女猎+3 民。
+- 信息隔离：双闸——`channel_router.py` 写时按 role 订阅投递（无关 Agent 物理收不到，落 channel_events 审计）；`observation_builder.py` 读时按 visibility 插件遮蔽 `[REDACTED:reason]`，ground_truth vs visible 双视图落库。
+- Trace：七层全链路落库（观测→记忆/信念→prompt 仓库→拼装→LLM 调用→决策→排行榜），WS 推送+前端逐层下钻；决策 JSON 走 `parser.py` 四级解析链（strict→json_repair→repair prompt→rule_fallback）。
+- 复盘：`counterfactual.py` 回放-分叉（同 seed 重放已存决策至 fork 点，换 alt 决策后真 LLM 续演）；`badcase.py` 失误→根因→建议→采纳→验证闭环。
+- 排行榜：`leaderboard_sink.py` 按 composition/model/persona/agent_stack 四维聚合 win_rate+24 指标，快照持久化。
+
+**可借鉴**：插件化内核（加角色零核心改动）、双闸隔离、四级 JSON 解析链、SkillPipeline 五 middleware（Trace/Permission/Quota/SpecValidation/Emit）、同 seed 复现+决策全落库支撑反事实下钻。
+
+**坑**：公开仓库只留代码（README 承诺的 23 份 docs/ 和 server/.venv 均未入库）；`pyproject.toml` 无 build-system，`pip install -e .` 失败；测试强依赖真实 PostgreSQL（schema 隔离），无 DB 无法跑；单局约 1 小时（豆包推理模型 54s/call），跑批成本高；LLM provider 仅豆包；仅 1 个公开 commit、无文档难维护。
+
+**结论**：完整可跑的高质量工程（非概念验证），但属"重依赖单机项目"：需自备 PG+豆包 Key。架构与复盘体系参考价值极高，建议借鉴其内核/隔离/Trace 设计，LLM 层换通用 provider、删繁就简自建。
+
+## 总结：对自建竞技场的启示
+
+| 设计点 | 最佳来源 |
+|---|---|
+| 纯引擎+事件流+可见性分层（可单测/回放） | chzisnull/werewolf-ai、KylJin/Werewolf |
+| 结构化输出防注入（pydantic / JSON schema） | Guoen0、MuqianSun 四级解析链 |
+| 信息隔离（写时路由 + 读时遮蔽双闸） | MuqianSun、KylJin `visible_to` |
+| 多狼夜间协商收敛 | MuqianSun `wolf_discuss.py`、agentscope MsgHub |
+| 引擎侧显式私发/群发方法（可审计） | muranUSTB agentscope |
+| 胜率×角色×模型统计 | Guoen0 `stati.py` |
+| 同 seed 复现 + 决策全落库（反事实复盘） | MuqianSun |
+| 轻量双通道输出协议（思考 + `[[n]]` 动作） | muranUSTB prompts |
+| 可插拔模型后端（统一 query() 接口） | KylJin `backends/` |
+| 主持人 prompt 注入私密信息写法 | HMJiangGatech |
+
+**共同的坑**：历史全量膨胀无截断、无重试/校验静默失败、规则写死、依赖锁不住。
