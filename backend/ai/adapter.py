@@ -154,14 +154,28 @@ class AIAdapter:
         content = msg.get("content") or ""
         reasoning = msg.get("reasoning_content") or ""
         if reasoning and not content:
-            return reasoning
+            # 思考链中尝试提取最终答案 JSON（部分模型把答案写在思考里）
+            json_match = re.search(r'\{[\s\S]*\}', reasoning)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group())
+                    parsed.setdefault("reasoning", reasoning)
+                    parsed.setdefault("speech", "")
+                    return json.dumps(parsed, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    pass
+            # 提取失败：思考链绝不泄露为发言，返回空 JSON
+            return json.dumps({"reasoning": reasoning, "speech": ""},
+                              ensure_ascii=False)
         if reasoning:
             try:
                 parsed_content = json.loads(content)
                 parsed_content["reasoning"] = reasoning
+                parsed_content.setdefault("speech", "")
                 return json.dumps(parsed_content, ensure_ascii=False)
             except (json.JSONDecodeError, TypeError):
-                return json.dumps({"reasoning": reasoning, "speech": content}, ensure_ascii=False)
+                return json.dumps({"reasoning": reasoning, "speech": content},
+                                  ensure_ascii=False)
         return content
 
     # ─── Prompt 构建 ───
@@ -174,15 +188,15 @@ class AIAdapter:
 
 你的人设：{personality}
 
-输出要求（严格 JSON）：
+输出要求（严格 JSON，字段必须齐全）：
 {{
   "reasoning": "你的内心推理（观众会看到，但其他玩家看不到）",
-  "speech": "你要公开发言的内容（所有玩家可见）",
+  "speech": "你要公开发言的内容（所有玩家可见）——必须是非空字符串，写出一段完整的发言，不得省略",
   "confidence": 0.0到1.0,
   "vote_target": "投票/行动目标座位号（仅需要行动时填写，其他填null）"
 }}
 
-注意：只输出 JSON，不要输出其他内容。"""
+注意：只输出 JSON，不要输出其他内容。speech 字段必须是完整的公开话语，不能为空，不能省略。"""
 
     def _build_speech_prompt(self, engine: GameEngine, player_id: str) -> str:
         state = engine.state
@@ -403,7 +417,7 @@ class AIAdapter:
                 return json.loads(json_match.group())
             except json.JSONDecodeError:
                 pass
-        return {"speech": raw, "reasoning": "", "confidence": 0.3}
+        return {"speech": "", "reasoning": "", "confidence": 0.3}
 
     def _resolve_seat_target(self, engine: GameEngine, target, exclude_id: str = "") -> str:
         if not target or target == "null":
@@ -436,7 +450,7 @@ class AIAdapter:
             raw = await self._call(messages)
             parsed = self._parse_response(raw)
             return AIResponse(
-                content=parsed.get("speech", raw),
+                content=parsed.get("speech") or "[本回合未发言]",
                 reasoning=parsed.get("reasoning", ""),
                 confidence=float(parsed.get("confidence", 0.5)),
                 thinking_time=round(time.time() - start, 1),
