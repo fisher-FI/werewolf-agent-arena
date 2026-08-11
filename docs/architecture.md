@@ -70,7 +70,9 @@ flowchart TD
 
 ## 实现架构总览（渲染图）
 
-![实现架构总览](architecture.svg)
+![实现架构总览](architecture.drawio.png)
+
+> 可编辑源文件：`architecture.drawio`（用 draw.io 打开可继续修改）
 
 ## 图例
 
