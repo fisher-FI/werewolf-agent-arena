@@ -27,14 +27,32 @@ logger = logging.getLogger("werewolf")
 manager = RoomManager()
 
 
+def _load_env_file(path: str = None):
+    """手动解析 .env（零依赖）"""
+    path = path or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 加载 .env 环境变量
+    _load_env_file()
     # 启动时加载默认 API key
     api_key = os.getenv("XIAOMI_API_KEY", "")
     base_url = os.getenv("XIAOMI_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
+    model = os.getenv("XIAOMI_MODEL", "deepseek-v4-flash")
     if api_key:
         manager.default_ai_config.api_key = api_key
         manager.default_ai_config.base_url = base_url
+        manager.default_ai_config.model = model
     logger.info(f"Default AI: {manager.default_ai_config.provider}/{manager.default_ai_config.model}")
     yield
 
