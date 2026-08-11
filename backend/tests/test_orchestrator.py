@@ -21,6 +21,11 @@ class FakeAdapter:
                           reasoning="根据现有信息，我保持谨慎。",
                           confidence=0.6, thinking_time=0.1)
 
+    async def make_reflection(self, engine, player_id, last_speech):
+        # 默认反射：认为无需补充
+        return AIResponse(content="", reasoning="我的发言已充分，无需补充。",
+                          confidence=0.5, thinking_time=0.1)
+
     async def cast_vote(self, engine, player_id):
         alive = [p for p in engine.state.alive_players if p != player_id]
         return AIResponse(content="", reasoning="随机投票",
@@ -108,3 +113,44 @@ async def test_full_game_all_boards(board_id):
 # 手动注册 asyncio 模式
 def pytest_configure(config):
     pass
+
+
+class FakeReflectiveAdapter(FakeAdapter):
+    """带二次思考的假 LLM：发言后总是补充一句"""
+    async def make_speech(self, engine, player_id):
+        return AIResponse(content="我怀疑有人隐藏身份。",
+                          reasoning="观察中", confidence=0.6, thinking_time=0.1)
+
+    async def make_reflection(self, engine, player_id, last_speech):
+        return AIResponse(
+            content=f"补充：我注意到{last_speech}，补充一点，我认为5号也可疑。",
+            reasoning="反思：我的发言有点笼统，补充具体怀疑对象。",
+            confidence=0.7, thinking_time=0.1)
+
+
+@pytest.mark.asyncio
+async def test_reflection_adds_second_speech():
+    room = make_room("ywls")
+    room.delay_factor = 0.0
+    # 覆盖为带反思的 adapter
+    room.adapters = {p.id: FakeReflectiveAdapter() for p in room.players}
+    await _run_game(room, max_seconds=20)
+    speeches = [e for e in room.game_events
+                if e.get("event_type") == "player_speech"]
+    reflections = [e for e in speeches if e.get("metadata", {}).get("reflection")]
+    assert reflections, "应有二次思考补充发言"
+    assert all("补充" in e["content"] for e in reflections), "补充内容应包含反思文本"
+    # 二次思考不应改变玩家状态（纯追加发言）
+    assert room.status == "finished"
+
+
+@pytest.mark.asyncio
+async def test_reflection_can_be_disabled():
+    room = make_room("ywls")
+    room.delay_factor = 0.0
+    room.reflection_enabled = False
+    room.adapters = {p.id: FakeReflectiveAdapter() for p in room.players}
+    await _run_game(room, max_seconds=20)
+    reflections = [e for e in room.game_events
+                   if e.get("metadata", {}).get("reflection")]
+    assert not reflections, "关闭开关后不应有二次思考"

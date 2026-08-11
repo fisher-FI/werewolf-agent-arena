@@ -585,3 +585,15 @@
 .evt-idiot { border-left: 3px solid rgba(244,114,182,0.5); }
 .evt-knight { border-left: 3px solid rgba(234,179,8,0.5); }
 .evt-guard { border-left: 3px solid rgba(148,163,184,0.5); }
+
+/* ── 二次思考标记 ── */
+.reflection-badge {
+  font-size: 10px;
+  color: #a78bfa;
+  background: rgba(167,139,250,0.12);
+  border: 1px solid rgba(167,139,250,0.35);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 8px;
+  white-space: nowrap;
+}

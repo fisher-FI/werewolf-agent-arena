@@ -291,6 +291,7 @@ export default function Room() {
               <span className="evt-avatar">{p?.role ? (ROLE_EMOJI[p.role] || '👤') : '👤'}</span>
               <span className="evt-player">{evt.player_name}</span>
               <span className="evt-seat">{p?.seat}号</span>
+              {evt.metadata?.reflection && <span className="reflection-badge">🤔 二次思考</span>}
             </div>
             <div className="evt-body">{evt.content}</div>
           </>

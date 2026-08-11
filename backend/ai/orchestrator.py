@@ -41,6 +41,7 @@ class Room:
         self.game_reasonings: list[dict] = []
         self.connected_clients: int = 0
         self.delay_factor: float = 1.0   # 测试置 0 可加速
+        self.reflection_enabled: bool = True  # 二次思考开关
 
     # ─── 基础 ───
 
@@ -389,6 +390,19 @@ class Room:
                 event = self.engine.process_speech(speaker_id, resp.content, resp.reasoning)
                 await self.broadcast("game_event", event.to_dict())
                 await self._broadcast_ai(speaker_id, resp)
+
+                # ── 二次思考：反思刚才的发言，补充/修正一轮 ──
+                if self.reflection_enabled and resp.content and \
+                        resp.content != "[AI 暂时无法发言]":
+                    await self._check_pause()
+                    ref = await self.adapters[speaker_id].make_reflection(
+                        self.engine, speaker_id, resp.content)
+                    if ref.content:
+                        ref_event = self.engine.process_speech(
+                            speaker_id, ref.content, ref.reasoning)
+                        ref_event.metadata["reflection"] = True
+                        await self.broadcast("game_event", ref_event.to_dict())
+                        await self._broadcast_ai(speaker_id, ref, "二次思考补充")
             elif player.player_type == "human":
                 await self.broadcast("wait_human_speech", {
                     "player_id": speaker_id, "player_name": player.name,

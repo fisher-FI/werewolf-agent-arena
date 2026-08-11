@@ -463,6 +463,39 @@ class AIAdapter:
                 thinking_time=round(time.time() - start, 1),
             )
 
+    async def make_reflection(self, engine: GameEngine, player_id: str,
+                              last_speech: str) -> AIResponse:
+        """二次思考：反思刚才的发言，再补充/修正一轮"""
+        start = time.time()
+        role = Role(engine.state.roles.get(player_id))
+        messages = [
+            {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
+            {"role": "user", "content": (
+                f"这是第{engine.state.day_count}天的讨论阶段。\n"
+                f"你刚才的发言是：\n「{last_speech}」\n\n"
+                f"请对你刚才的发言进行二次思考："
+                f"1. 有没有暴露身份/意图的漏洞？\n"
+                f"2. 有没有需要补充的信息或修正的表述？\n"
+                f"3. 根据当前局势，你决定补充还是维持？\n\n"
+                f"输出严格 JSON：\n"
+                f"{{\"reasoning\": \"你的反思过程\", \"speech\": \"补充或修正后的发言（觉得无需补充则填null）\", \"confidence\": 0.0到1.0}}"
+            )},
+        ]
+        try:
+            raw = await self._call(messages)
+            parsed = self._parse_response(raw)
+            speech = parsed.get("speech")
+            return AIResponse(
+                content=speech if speech and speech not in ("null", "None") else "",
+                reasoning=parsed.get("reasoning", ""),
+                confidence=float(parsed.get("confidence", 0.5)),
+                thinking_time=round(time.time() - start, 1),
+            )
+        except Exception as e:
+            logger.error(f"AI reflection error: {e}")
+            return AIResponse(content="", reasoning=f"Error: {str(e)}",
+                              thinking_time=round(time.time() - start, 1))
+
     async def cast_vote(self, engine: GameEngine, player_id: str) -> AIResponse:
         start = time.time()
         role = Role(engine.state.roles.get(player_id))
