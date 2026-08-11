@@ -1,0 +1,88 @@
+/* ─── 大厅页面 — Linear Design System ─── */
+.lobby {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+}
+
+.lobby-hero {
+  text-align: center;
+  padding: 60px 20px 40px;
+}
+.lobby-hero h1 {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-hover) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.lobby-hero p {
+  color: var(--text-tertiary);
+  font-size: 15px;
+  margin-bottom: 28px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+.btn-lg {
+  padding: 10px 32px;
+  font-size: 15px;
+  border-radius: var(--radius);
+}
+
+.room-list {
+  width: 100%;
+  max-width: 600px;
+}
+.room-list h2 {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.room-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.15s ease;
+}
+.room-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+.room-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.room-id {
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.room-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+}
+.status-waiting { background: rgba(255, 170, 68, 0.12); color: var(--warning); }
+.status-playing { background: rgba(39, 166, 68, 0.12); color: var(--success-bright); }
+.status-finished { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
+.room-players {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
