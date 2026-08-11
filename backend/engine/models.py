@@ -100,12 +100,14 @@ class AIConfig:
     temperature: float = 0.8
     personality: str = "一个聪明、善于推理的玩家"
     max_tokens: int = 500
+    reasoning_effort: str = "max"     # 思考强度：off/minimal/low/medium/high/max
 
     def to_dict(self) -> dict:
         return {
             "provider": self.provider, "model": self.model,
             "base_url": self.base_url, "temperature": self.temperature,
             "personality": self.personality, "max_tokens": self.max_tokens,
+            "reasoning_effort": self.reasoning_effort,
         }
 
 

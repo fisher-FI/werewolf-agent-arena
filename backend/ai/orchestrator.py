@@ -18,6 +18,7 @@ from engine.models import (
 from engine.game import GameEngine
 from engine.boards import Board, get_board
 from ai.adapter import AIAdapter, AIResponse
+from ai.memory import MemoryManager
 
 logger = logging.getLogger("werewolf.room")
 
@@ -42,6 +43,7 @@ class Room:
         self.connected_clients: int = 0
         self.delay_factor: float = 1.0   # 测试置 0 可加速
         self.reflection_enabled: bool = True  # 二次思考开关
+        self.memory = MemoryManager()    # 玩家全量记忆
 
     # ─── 基础 ───
 
@@ -133,7 +135,9 @@ class Room:
         for p in self.players:
             if p.player_type == "ai":
                 config = p.ai_config or default_config
-                self.adapters[p.id] = AIAdapter(config)
+                adapter = AIAdapter(config)
+                adapter.set_memory(self.memory)
+                self.adapters[p.id] = adapter
 
     # ─── 通用工具 ───
 
@@ -230,6 +234,10 @@ class Room:
                     self.engine.process_guard_protect(guards[0], resp.action)
                     await self._emit_engine_events([self.engine.state.events[-1]])
                     await self._broadcast_ai(guards[0], resp, "守卫守护目标")
+                    # 记忆：守卫守护记录
+                    t = self.engine.get_player(resp.action)
+                    self.memory.get(guards[0]).record_private(
+                        state.day_count, f"你守护了 {t.name if t else resp.action}")
                 await self._delay(2)
 
         # 狼人（含狼王/白狼王）：内部讨论 + 共识刀人
@@ -247,6 +255,14 @@ class Room:
                 for e in self.engine.state.events[-2:]:
                     await self._emit_engine_events([e])
                 await self._broadcast_ai(witches[0], resp, "女巫行动")
+                # 记忆：女巫药水使用
+                mem = self.memory.get(witches[0])
+                if resp.save:
+                    mem.record_private(state.day_count, "你使用了解药救人")
+                if resp.poison_target:
+                    t = self.engine.get_player(resp.poison_target)
+                    mem.record_private(state.day_count,
+                                       f"你使用了毒药毒杀 {t.name if t else resp.poison_target}")
                 await self._delay(2)
 
         # 预言家
@@ -258,6 +274,12 @@ class Room:
                     self.engine.process_seer_check(seers[0], resp.action)
                     await self._emit_engine_events([self.engine.state.events[-1]])
                     await self._broadcast_ai(seers[0], resp, "预言家查验")
+                    # 记忆：预言家查验结果（私密）
+                    is_wolf = self.engine.state.roles.get(resp.action) == Role.WEREWOLF
+                    t = self.engine.get_player(resp.action)
+                    self.memory.get(seers[0]).record_private(
+                        state.day_count,
+                        f"你查验了 {t.name if t else resp.action}，结果是{'狼人' if is_wolf else '好人'}")
                 await self._delay(2)
 
         # 结算夜晚
@@ -265,6 +287,15 @@ class Room:
         events = self.engine.resolve_night()
         if await self._emit_engine_events(events):
             return
+        # 记忆：所有存活玩家记录夜晚结果
+        deaths_today = [e for e in events
+                        if e.event_type == EventType.PLAYER_DEATH]
+        if deaths_today:
+            night_note = "昨晚 " + ", ".join(e.content for e in deaths_today)
+        else:
+            night_note = "昨晚是平安夜"
+        for pid in self.engine.state.alive_players:
+            self.memory.get(pid).record_night(state.day_count, night_note)
         await self._handle_shoot_window()
         if self.status == "finished":
             return
@@ -278,6 +309,7 @@ class Room:
             if resp.action:
                 self.engine.process_werewolf_kill(resp.action)
                 await self._broadcast_ai(wolves[0], resp, "狼人选择击杀目标")
+                self._record_wolf_kill(wolves, resp.action)
             await self._delay(2)
             return
 
@@ -315,7 +347,16 @@ class Room:
         if consensus:
             self.engine.process_werewolf_kill(consensus)
             await self._emit_engine_events([self.engine.state.events[-1]])
+            self._record_wolf_kill(wolves, consensus)
         await self._delay(2)
+
+    def _record_wolf_kill(self, wolves: list, target_id: str):
+        """狼人刀人记录到狼队私密记忆"""
+        t = self.engine.get_player(target_id)
+        tname = t.name if t else target_id
+        for wolf_id in wolves:
+            self.memory.get(wolf_id).record_private(
+                self.engine.state.day_count, f"你们狼队选择击杀 {tname}")
 
     def _summarize_proposals(self, proposals: dict) -> str:
         parts = []
@@ -390,6 +431,15 @@ class Room:
                 event = self.engine.process_speech(speaker_id, resp.content, resp.reasoning)
                 await self.broadcast("game_event", event.to_dict())
                 await self._broadcast_ai(speaker_id, resp)
+                # 记忆：自己发言 + 所有存活玩家听到
+                self.memory.get(speaker_id).record_own_speech(
+                    self.engine.state.day_count, resp.content)
+                self.memory.get(speaker_id).record_reasoning(
+                    self.engine.state.day_count, "发言", resp.reasoning)
+                for other in self.engine.state.alive_players:
+                    if other != speaker_id:
+                        self.memory.get(other).record_heard(
+                            self.engine.state.day_count, player.name, resp.content)
 
                 # ── 二次思考：反思刚才的发言，补充/修正一轮 ──
                 if self.reflection_enabled and resp.content and \
@@ -403,6 +453,13 @@ class Room:
                         ref_event.metadata["reflection"] = True
                         await self.broadcast("game_event", ref_event.to_dict())
                         await self._broadcast_ai(speaker_id, ref, "二次思考补充")
+                        # 记忆：补充发言也记录
+                        self.memory.get(speaker_id).record_own_speech(
+                            self.engine.state.day_count, ref.content)
+                        for other in self.engine.state.alive_players:
+                            if other != speaker_id:
+                                self.memory.get(other).record_heard(
+                                    self.engine.state.day_count, player.name, ref.content)
             elif player.player_type == "human":
                 await self.broadcast("wait_human_speech", {
                     "player_id": speaker_id, "player_name": player.name,
@@ -481,6 +538,10 @@ class Room:
                     await self.broadcast("game_event", self.engine.state.events[-1].to_dict())
                     await self._broadcast_ai(pid, resp, "投票")
                     logger.info(f"[投票阶段] {player.name} 投给 {self.engine.get_player(resp.action).name if resp.action in self.engine.players else resp.action}")
+                    # 记忆：自己投了谁
+                    target_name = (self.engine.get_player(resp.action).name
+                                   if resp.action in self.engine.players else resp.action)
+                    self.memory.get(pid).record_vote(self.engine.state.day_count, target_name)
                 else:
                     # 弃票是合法行为：明确记录并广播
                     event = self.engine.process_abstain(pid)

@@ -24,13 +24,38 @@ logger = logging.getLogger("werewolf.ai")
 
 # ─── Prompt 模板 ───
 
-GAME_RULES = """标准12人狼人杀规则：
-- 阵营：狼人阵营 vs 好人阵营（神职+平民），丘比特板子可能有情侣第三方
-- 胜利条件：好人方消灭所有狼人则好人胜；狼人数量≥好人数、或神职全灭、或平民全灭则狼人胜
-- 流程：夜晚→白天讨论→投票→循环
-- 夜晚行动顺序（按板子）：守卫守人→狼人杀人→女巫救人/毒人→预言家查验→(首夜)丘比特连情侣
-- 白天：所有人依次发言，然后投票放逐一人
-- 特殊规则：猎人被狼刀死不能开枪；同守同救必死；守卫不能连守同一人；白痴被票出翻牌免死；情侣殉情"""
+GAME_RULES = """你是「AI 狼人杀竞技场」中的一名玩家。以下是完整游戏规则，你必须严格遵守。
+
+【阵营与胜负】
+- 狼人阵营：狼人、狼王、白狼王。狼人获胜条件（满足其一）：①场上狼人数 ≥ 好人生存数；②神职全部出局（屠边）；③平民全部出局（屠边）。
+- 好人阵营：预言家、女巫、猎人、守卫、白痴、骑士、平民。好人获胜条件：所有狼人出局。
+- 丘比特板子额外存在情侣第三方阵营：情侣（一狼一好人时）存活到最后且场上只剩情侣两人时，情侣阵营获胜（优先级高于狼人和好人）。
+
+【角色技能】
+- 狼人：每夜与队友商量后击杀一名玩家。
+- 狼王：同狼人，被投票放逐时可以带走一名玩家；白天可以自爆带走一名玩家。
+- 白狼王：同狼人，白天可以自爆带走一名玩家（被放逐不能带走）。
+- 预言家：每夜查验一名玩家，得知其是狼人还是好人。
+- 女巫：一瓶解药（救人）+一瓶毒药（毒杀），各限用一次。第一晚被刀的人会被告知。
+- 猎人：出局时可以开枪带走一名玩家，但被狼人杀害时不能开枪。
+- 守卫：每夜守护一名玩家免遭狼人杀害，不能连续两晚守同一人。注意：同守同救（守卫和女巫同时救同一人）会导致该玩家死亡！
+- 白痴：被投票放逐时可以翻牌免死，之后失去投票权。
+- 骑士：白天可以发起一次决斗，挑战一名玩家：对方是狼则对方死，对方不是狼则你自己死。整局仅一次。
+- 丘比特：首夜选择两名玩家成为情侣，不能选自己。情侣一方死亡另一方殉情。
+- 平民：无技能，靠推理和投票。
+
+【游戏流程】
+1. 夜晚阶段：按板子顺序行动——守卫守人 → 狼人（内部商量后杀人）→ 女巫（救人/毒人）→ 预言家查验 → （首夜）丘比特连情侣。
+2. 白天阶段：全体存活玩家按顺序发言，然后（如有）骑士决斗、狼王/白狼王自爆窗口，最后投票放逐一名玩家。
+3. 平票无人出局，直接进入夜晚。
+4. 任何阶段满足胜负条件立即结束游戏。
+
+【行为准则】
+- 你是独立思考的玩家，根据你掌握的信息做决策。
+- 发言是公开的，所有人（包括狼人）都能听到；内心推理只有你自己和观战者能看到，绝不会泄露给其他玩家。
+- 狼人玩家绝不能在公开发言中暴露自己是狼人；狼人之间互相认识，白天可以暗中配合。
+- 预言家/女巫/守卫等神职玩家要隐藏身份，避免被狼人夜间击杀，但必要时可以跳身份带队。
+- 投票要基于发言逻辑和已知信息，不要乱投。"""
 
 ROLE_PROMPTS = {
     Role.WEREWOLF: """你是狼人阵营。你的目标：
@@ -114,6 +139,19 @@ class AIAdapter:
     def __init__(self, config: AIConfig):
         self.config = config
         self._http = httpx.AsyncClient(timeout=60.0)
+        self.memory = None   # MemoryManager，由 Room 注入
+
+    def set_memory(self, memory_manager):
+        self.memory = memory_manager
+
+    def _user_msg(self, engine: GameEngine, player_id: str, prompt_text: str) -> dict:
+        """构造 user 消息：全量记忆前缀 + 当前情境 prompt"""
+        prefix = ""
+        if self.memory:
+            mem_text = self.memory.render_for(player_id)
+            if mem_text:
+                prefix = self._build_memory_block(mem_text)
+        return {"role": "user", "content": prefix + prompt_text}
 
     async def _call(self, messages: list[dict], temperature: float = None) -> str:
         """统一的 API 调用 — OpenAI 兼容格式，带重试"""
@@ -131,6 +169,13 @@ class AIAdapter:
             "max_tokens": self.config.max_tokens,
             "response_format": {"type": "json_object"},
         }
+        # 思考强度（deepseek 系推理模型）：pi 同款参数
+        effort = self.config.reasoning_effort
+        if effort and effort != "off":
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = effort
+        elif effort == "off":
+            payload["thinking"] = {"type": "disabled"}
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -191,13 +236,21 @@ class AIAdapter:
 
 输出要求（严格 JSON，字段必须齐全）：
 {{
-  "reasoning": "你的内心推理（观众会看到，但其他玩家看不到）",
-  "speech": "你要公开发言的内容（所有玩家可见）——必须是非空字符串，写出一段完整的发言，不得省略",
+  "reasoning": "你的内心推理（观众会看到，但其他玩家看不到）——只写分析过程和策略思考，不要把要说的原话写在这里",
+  "speech": "你要公开发言的内容（所有玩家可见）——把你要说的原话完整写在 speech 字段里！这是别人唯一能听到的话。speech 必须是非空字符串，必须是一段完整通顺的公开话语，不得省略，不得为 null",
   "confidence": 0.0到1.0,
   "vote_target": "投票/行动目标座位号（仅需要行动时填写，其他填null）"
 }}
 
-注意：只输出 JSON，不要输出其他内容。speech 字段必须是完整的公开话语，不能为空，不能省略。"""
+重要：speech 字段是你唯一的发声渠道！你要说的话必须一字不差写在 speech 里，绝不能把发言内容藏在 reasoning 里。只输出 JSON。"""
+
+    def _build_memory_block(self, memory_text: str) -> str:
+        """把玩家记忆注入为 user 消息前缀（全量上下文）"""
+        return f"""以下是你的完整游戏记忆（从第1天到现在，按时间顺序）：
+
+{memory_text}
+
+"""
 
     def _build_speech_prompt(self, engine: GameEngine, player_id: str) -> str:
         state = engine.state
@@ -416,6 +469,15 @@ class AIAdapter:
         if json_match:
             try:
                 parsed = json.loads(json_match.group())
+                # 防御：speech 被模型嵌套成 JSON 对象时，提取其中的文本
+                if isinstance(parsed.get("speech"), dict):
+                    inner = parsed["speech"]
+                    parsed["speech"] = (inner.get("speech") or inner.get("content")
+                                         or inner.get("text") or str(inner))
+                if isinstance(parsed.get("reasoning"), dict):
+                    inner = parsed["reasoning"]
+                    parsed["reasoning"] = (inner.get("reasoning") or inner.get("content")
+                                            or str(inner))
                 return parsed
             except json.JSONDecodeError:
                 logger.warning(f"JSON 解析失败，raw前200字: {raw[:200]}")
@@ -490,13 +552,26 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_speech_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_speech_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
-            
+            speech = parsed.get("speech")
+            # max 思考强度下模型常把发言写进 reasoning、speech 留空：二次追问强制只出 speech
+            if not speech or speech in ("null", "None"):
+                force = await self._call_json([
+                    {"role": "system", "content": "你是一个狼人杀玩家。"},
+                    {"role": "user", "content": (
+                        f"你刚才的思考是：{parsed.get('reasoning', '')[:800]}\n\n"
+                        f"现在请你只做一件事：把你真正要公开发言的话写出来。\n"
+                        f"输出严格 JSON：{{\"speech\": \"你要公开发言的原话（必须是一段完整的发言，不能为空）\"}}"
+                    )},
+                ])
+                speech = force.get("speech") or ""
+                parsed["speech"] = speech
+                parsed["reasoning"] = (parsed.get("reasoning") or "") + "\n[补充：发言被强制提取]"
             return AIResponse(
-                content=parsed.get("speech") or "[本回合未发言]",
+                content=speech or "[本回合未发言]",
                 reasoning=parsed.get("reasoning", ""),
                 confidence=float(parsed.get("confidence", 0.5)),
                 thinking_time=round(time.time() - start, 1),
@@ -516,7 +591,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": (
+            self._user_msg(engine, player_id,
                 f"这是第{engine.state.day_count}天的讨论阶段。\n"
                 f"你刚才的发言是：\n「{last_speech}」\n\n"
                 f"请对你刚才的发言进行二次思考："
@@ -525,7 +600,7 @@ class AIAdapter:
                 f"3. 根据当前局势，你决定补充还是维持？\n\n"
                 f"输出严格 JSON：\n"
                 f"{{\"reasoning\": \"你的反思过程\", \"speech\": \"补充或修正后的发言（觉得无需补充则填null）\", \"confidence\": 0.0到1.0}}"
-            )},
+            ),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -547,7 +622,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_vote_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_vote_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -576,7 +651,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_night_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_night_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -613,9 +688,9 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content":
+            self._user_msg(engine, player_id,
                 f"现在是第{engine.state.day_count}个夜晚，你们狼人内部讨论杀人目标。\n\n队友们的提案：\n{summary}\n\n"
-                f"请投出你的最终一票。严格按 JSON 格式输出，vote_target 填目标座位号。"},
+                f"请投出你的最终一票。严格按 JSON 格式输出，vote_target 填目标座位号。"),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -637,7 +712,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_shoot_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_shoot_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -659,7 +734,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_explode_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_explode_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
@@ -684,7 +759,7 @@ class AIAdapter:
         role = Role(engine.state.roles.get(player_id))
         messages = [
             {"role": "system", "content": self._build_system_prompt(role, self.config.personality)},
-            {"role": "user", "content": self._build_duel_prompt(engine, player_id)},
+            self._user_msg(engine, player_id, self._build_duel_prompt(engine, player_id)),
         ]
         try:
             parsed = await self._call_json(messages)
