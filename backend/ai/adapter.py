@@ -138,7 +138,7 @@ class AIAdapter:
 
     def __init__(self, config: AIConfig):
         self.config = config
-        self._http = httpx.AsyncClient(timeout=60.0)
+        self._http = httpx.AsyncClient(timeout=180.0)  # max 思考可能超 60s
         self.memory = None   # MemoryManager，由 Room 注入
 
     def set_memory(self, memory_manager):
@@ -182,7 +182,7 @@ class AIAdapter:
             try:
                 resp = await self._http.post(url, json=payload, headers=headers)
                 if resp.status_code in (429, 500, 502, 503, 504):
-                    wait = 2 ** attempt  # 1s, 2s, 4s 指数退避
+                    wait = 3 * (2 ** attempt)  # 3s, 6s, 12s 指数退避（限流时更久）
                     logger.warning(f"LLM {resp.status_code}, {wait}s 后重试 ({attempt+1}/{max_retries})")
                     await __import__("asyncio").sleep(wait)
                     continue
@@ -191,7 +191,7 @@ class AIAdapter:
             except httpx.TimeoutException as e:
                 if attempt == max_retries - 1:
                     raise
-                await __import__("asyncio").sleep(2 ** attempt)
+                await __import__("asyncio").sleep(3 * (2 ** attempt))
         else:
             raise RuntimeError(f"LLM 请求连续失败 {max_retries} 次")
 

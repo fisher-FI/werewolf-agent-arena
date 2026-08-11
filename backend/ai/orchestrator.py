@@ -322,10 +322,12 @@ class Room:
             await self._delay(2)
             return
 
-        # 第 1 轮：独立提案
+        # 第 1 轮：独立提案（并行，节省等待）
         proposals = {}
-        for wolf_id in wolves:
+        async def _propose(wolf_id):
             resp = await self._act(wolf_id, "decide_night_action")
+            return wolf_id, resp
+        for wolf_id, resp in await asyncio.gather(*[_propose(w) for w in wolves]):
             proposals[wolf_id] = resp.action
             await self._broadcast_ai(wolf_id, resp, "狼人提案")
 
@@ -340,12 +342,14 @@ class Room:
 
         consensus = majority(proposals)
 
-        # 第 2 轮：汇总队友倾向，投最终票
+        # 第 2 轮：汇总队友倾向，投最终票（并行）
         if consensus is None:
             summary = self._summarize_proposals(proposals)
             final_votes = {}
-            for wolf_id in wolves:
+            async def _final(wolf_id):
                 resp = await self._act(wolf_id, "decide_final_wolf_vote", summary)
+                return wolf_id, resp
+            for wolf_id, resp in await asyncio.gather(*[_final(w) for w in wolves]):
                 final_votes[wolf_id] = resp.action
                 await self._broadcast_ai(wolf_id, resp, "狼人最终投票")
             consensus = majority(final_votes)
