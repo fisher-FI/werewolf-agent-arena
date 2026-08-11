@@ -64,7 +64,20 @@
 
 **结论**：设计思路（双通道输出、引擎侧隔离、MsgHub 狼人团聊）值得抄，但 AgentScope 只是薄壳且 API 变动大；竞技场建议自研 asyncio 编排 + OpenAI 兼容客户端。
 
+## 5. KylJin/Werewolf（NeurIPS 2024，一夜狼人，可借鉴价值高）
+
+**架构**：gym 风格分层设计。`onuw/environments/base.py` 定义 `Environment` 抽象类（reset/get_observation/step/check_action/is_terminal）+ `TimeStep`；`werewolf.py` 实现 ONUW 环境，状态全由 `MessagePool` 承载，用 `_current_phase`（Night→各角色→Day→Voting）+ `_switch_to_xxx()` 链式流转，Moderator 消息驱动回合；`arena.py` 是主循环（取玩家→观察→行动→校验→step，无效动作重试5次）；`agents/roles/base.py` 提供各阶段 prompt 模板，新角色只写 role_description；`agents/core/react.py` 纯 LLM、`dpins.py` 加 belief 建模+RL 策略选发言；`backends/` 统一 `query()` 接口可插拔多模型；`training/train.py`+`dataset_process/processor.py` 把日志转 d3rlpy 离线数据集训 CQL。
+
+**解耦**：环境只认 `Message`+`player_name`，动作是 JSON dict（如 `{"player":"xx","thought":".."}`），role prompt 约束格式、环境校验，天然可复用。**标准狼人杀只需**：新环境改写夜晚（预言家→女巫→猎人→狼人顺序）、加出局机制、换 role_pool 配置，白天/投票几乎原样。
+
+**可借鉴**：① `message_pool.get_visible_messages` 的 `visible_to` 私密信息机制（夜间信息必须）；② Moderator 消息驱动回合，天然适配 LLM 观察；③ `save_history` 带 ground truth/winner，直接支撑胜率统计；④ JSON 配置驱动建局。
+
+**坑**：完整历史无截断致 token 膨胀；`check_action` 未实现；依赖旧 openai SDK 与 d3rlpy 旧 API，训练链路现跑不通。
+
+## 6. HMJiangGatech/GPT4-werewolf
+
+**架构**：单文件 `agent_cn.py`（600 行）：`GameMaster` 主循环 + `PlayerBot` 各持完整 chat_history，夜晚行动是纯随机规则代码，LLM 只管白天发言/投票；规则全塞进一个 `GAME_PROMPT` 字符串；无环境/agent 分离、无校验，投票靠字符串匹配玩家名。**可借鉴**：主持人 prompt 注入私密信息（"记住你晚上的信息是…"）与狼人"归票"指令的写法。**坑**：不可扩展、无统计、旧 SDK，仅作 prompt 参考。
+
 ## 待补充
 
-- [ ] 5. Muqian-Sun/ai-werewolf-agent-teams（字节跳动评测+复盘平台）
-- [ ] 6. KylJin/Werewolf + HMJiangGatech/GPT4-werewolf（一夜狼人变体）
+- [ ] 5. Muqian-Sun/ai-werewolf-agent-teams（字节跳动评测+复盘平台，仍在调研中）
